@@ -32,6 +32,31 @@ app.get('/', (_req, res) =>
   })
 );
 
+// Reuse a connection attempt per warm instance, but retry after failures.
+let dbPromise = null;
+const initDb = () => {
+  if (!dbPromise) {
+    dbPromise = connectDB().catch((err) => {
+      dbPromise = null;
+      throw err;
+    });
+  }
+  return dbPromise;
+};
+
+app.use('/api', async (_req, res, next) => {
+  try {
+    await initDb();
+    next();
+  } catch (error) {
+    console.error('Database unavailable for API request:', error.message);
+    res.status(503).json({
+      success: false,
+      message: 'Database unavailable. Please try again later.',
+    });
+  }
+});
+
 // Core API Routes
 app.use('/api/udhaar', udhaarRoutes);
 app.use('/api/inventory', inventoryRoutes);
@@ -57,18 +82,6 @@ app.use((err, _req, res, _next) => {
 });
 
 const port = process.env.PORT || 5000;
-
-// In Vercel serverless environments, connectDB is called per invocation if not already connected
-let dbPromise = null;
-const initDb = () => {
-  if (!dbPromise) {
-    dbPromise = connectDB().catch((err) => {
-      console.warn('DB connect warning:', err.message);
-    });
-  }
-  return dbPromise;
-};
-initDb();
 
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
   app.listen(port, () => {

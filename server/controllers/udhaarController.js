@@ -14,6 +14,7 @@ import {
 
 export const getUdhaar = async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     const search = req.query.search || '';
     const status = req.query.status || 'active';
     const customers = await getCustomers(search, status);
@@ -82,11 +83,14 @@ export const deleteCustomer = async (req, res) => {
     }
 
     const result = await deleteCustomerService(id);
+    const archived = result.action === 'archived';
     return res.json({
       success: true,
-      action: 'deleted',
+      action: result.action,
       data: result.customer,
-      message: `Customer "${result.customer.name}" permanently deleted.`,
+      message: archived
+        ? `Customer "${result.customer.name}" safely archived.`
+        : `Customer "${result.customer.name}" permanently deleted.`,
     });
   } catch (error) {
     console.error('Error in deleteCustomer:', error.message);

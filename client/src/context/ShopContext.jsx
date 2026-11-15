@@ -50,12 +50,17 @@ export function ShopProvider({ children }) {
       const params = new URLSearchParams();
       if (search) params.append('search', search);
       if (status) params.append('status', status);
-      const res = await api.get(`/api/udhaar/customers?${params.toString()}`);
-      if (res.data?.success) {
+      const res = await api.get(`/api/udhaar/customers?${params.toString()}`, {
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      if (res.data?.success && Array.isArray(res.data.data)) {
         setCustomers(res.data.data);
+        return true;
       }
+      return false;
     } catch (err) {
       console.warn('Customers fetch issue:', err.message);
+      return false;
     }
   }, []);
 

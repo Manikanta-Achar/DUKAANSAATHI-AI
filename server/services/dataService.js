@@ -366,13 +366,19 @@ export async function deleteCustomer(id) {
     const hasBalance = Number(customer.totalUdhaar || 0) > 0;
 
     if (hasBalance || txnCount > 0) {
-      throw new Error(
-        `Cannot permanently delete customer "${customer.name}". They have ${hasBalance ? `an outstanding balance of ₹${customer.totalUdhaar}` : ''}${hasBalance && txnCount ? ' and ' : ''}${txnCount ? `${txnCount} transaction record(s)` : ''}. Please archive them instead.`
-      );
+      customer.isArchived = true;
+      customer.archivedAt = new Date();
+      await customer.save();
+      return {
+        success: true,
+        action: 'archived',
+        customer: customer.toObject ? customer.toObject() : customer,
+      };
     }
 
-    await Customer.findByIdAndDelete(id);
-    return { success: true, action: 'deleted', customer };
+    const deletedCustomer = await Customer.findByIdAndDelete(id);
+    if (!deletedCustomer) throw new Error('Customer not found');
+    return { success: true, action: 'deleted', customer: deletedCustomer };
   }
 
   ensureMemoryInitialized();
@@ -384,9 +390,10 @@ export async function deleteCustomer(id) {
   const hasBalance = Number(customer.totalUdhaar || 0) > 0;
 
   if (hasBalance || txnCount > 0) {
-    throw new Error(
-      `Cannot permanently delete customer "${customer.name}". They have ${hasBalance ? `an outstanding balance of ₹${customer.totalUdhaar}` : ''}${hasBalance && txnCount ? ' and ' : ''}${txnCount ? `${txnCount} transaction record(s)` : ''}. Please archive them instead.`
-    );
+    customer.isArchived = true;
+    customer.archivedAt = new Date();
+    customer.updatedAt = new Date();
+    return { success: true, action: 'archived', customer };
   }
 
   const [removed] = memoryStore.customers.splice(index, 1);

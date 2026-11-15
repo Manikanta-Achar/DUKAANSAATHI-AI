@@ -5,6 +5,9 @@ let isConnected = false;
 export async function connectDB() {
   let uri = process.env.MONGODB_URI;
   if (!uri || !uri.trim()) {
+    if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+      throw new Error('MONGODB_URI is required in production.');
+    }
     console.log('ℹ️ MONGODB_URI not provided. Running in Standalone In-Memory mode for immediate testing & demo.');
     return;
   }
@@ -22,11 +25,16 @@ export async function connectDB() {
     isConnected = true;
     console.log(`✅ MongoDB Atlas connected successfully! Database: ${mongoose.connection.db?.databaseName || 'dukaansaathi'}`);
   } catch (err) {
+    isConnected = false;
     console.warn(`⚠️ MongoDB Atlas connection notice: ${err.message}`);
-    console.log('ℹ️ Running on In-Memory Store so the website and all features stay 100% functional without interruption.');
+    throw err;
   }
 }
 
 export function isDbConnected() {
-  return isConnected && mongoose.connection.readyState === 1;
+  const connected = isConnected && mongoose.connection.readyState === 1;
+  if (!connected && (process.env.NODE_ENV === 'production' || process.env.VERCEL)) {
+    throw new Error('MongoDB is unavailable; persistent data operations cannot continue.');
+  }
+  return connected;
 }

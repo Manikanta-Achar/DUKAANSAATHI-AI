@@ -149,29 +149,34 @@ export default function Udhaar() {
   const handleDeleteOrArchive = async () => {
     if (!customerToDelete || isDeletingCustomer) return;
 
-    const hasBalance = Number(customerToDelete.totalUdhaar || 0) > 0;
-    const hasHistory = (customerToDelete.transactionCount || 0) > 0;
-    const mustArchive = hasBalance || hasHistory;
-
     setIsDeletingCustomer(true);
     try {
-      if (mustArchive) {
-        // Safe Archive Operation
-        const res = await api.post(`/api/udhaar/customers/${customerToDelete._id}/archive`);
-        if (res.data?.success) {
-          showToast(`Customer "${customerToDelete.name}" safely archived.`, 'success');
-          setCustomerToDelete(null);
-          await Promise.all([refreshCustomers(searchTerm, statusFilter), refreshDashboard()]);
-        }
-      } else {
-        // Permanent Deletion Operation (zero balance and zero transactions)
-        const res = await api.delete(`/api/udhaar/customers/${customerToDelete._id}`);
-        if (res.data?.success) {
-          showToast(`Customer "${customerToDelete.name}" permanently deleted.`, 'success');
-          setCustomerToDelete(null);
-          await Promise.all([refreshCustomers(searchTerm, statusFilter), refreshDashboard()]);
-        }
+      const res = await api.delete(`/api/udhaar/customers/${customerToDelete._id}`);
+      if (res.data?.success !== true || !['deleted', 'archived'].includes(res.data.action)) {
+        throw new Error(res.data?.message || 'The server did not confirm the customer operation.');
       }
+
+      const deletedName = customerToDelete.name;
+      const operation = res.data.action;
+      setCustomerToDelete(null);
+      const [customersRefreshed] = await Promise.all([
+        refreshCustomers(searchTerm, statusFilter),
+        refreshDashboard(),
+      ]);
+      if (!customersRefreshed) {
+        showToast(
+          `Customer "${deletedName}" was ${operation}, but the customer list could not be refreshed.`,
+          'error'
+        );
+        return;
+      }
+
+      showToast(
+        operation === 'archived'
+          ? `Customer "${deletedName}" safely archived.`
+          : `Customer "${deletedName}" permanently deleted.`,
+        'success'
+      );
     } catch (err) {
       showToast(err.response?.data?.message || 'Operation failed', 'error');
     } finally {
