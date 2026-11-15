@@ -17,6 +17,9 @@ const unavailableNetworkCodes = new Set([
 
 function getStatusCode(error, fallbackStatus) {
   if (error?.statusCode) return error.statusCode;
+  if (error?.name === 'ValidationError' || error?.name === 'CastError' || error?.type === 'entity.parse.failed') return 400;
+  if (error?.type === 'entity.too.large') return 413;
+  if (error?.code === 11000) return 409;
   if (
     unavailableMongoErrors.has(error?.name) ||
     unavailableNetworkCodes.has(error?.code) ||
@@ -40,7 +43,7 @@ export function sendApiError(res, error, fallbackStatus = 500) {
   console.error('API request failed:', {
     status,
     name: error?.name || 'Error',
-    message: safeMessage(error),
+    code: error?.code || null,
   });
 
   const message =
@@ -48,7 +51,7 @@ export function sendApiError(res, error, fallbackStatus = 500) {
       ? 'Database unavailable. Please try again later.'
       : status >= 500
         ? 'Internal server error.'
-        : error?.message || 'Request failed.';
+        : safeMessage(error) || 'Request failed.';
 
   return res.status(status).json({ success: false, message });
 }

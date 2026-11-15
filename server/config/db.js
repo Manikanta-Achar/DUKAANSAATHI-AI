@@ -1,15 +1,6 @@
 import mongoose from 'mongoose';
 
-const connectionCache =
-  globalThis.__dukaanSaathiMongoConnection ||
-  (globalThis.__dukaanSaathiMongoConnection = { promise: null, failures: 0, retryAfter: 0 });
-connectionCache.failures ||= 0;
-connectionCache.retryAfter ||= 0;
-mongoose.connection.on('disconnected', () => {
-  connectionCache.promise = null;
-});
-
-const isHosted = () => process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+const cache = globalThis.__dukaanSaathiMongoConnection ||= { promise: null };
 
 export class DatabaseUnavailableError extends Error {
   constructor(message = 'Database unavailable') {
@@ -19,81 +10,37 @@ export class DatabaseUnavailableError extends Error {
   }
 }
 
-function redactMongoUri(message, uri) {
-  let safeMessage = String(message || 'Unknown MongoDB error');
-  if (uri) safeMessage = safeMessage.split(uri).join('[REDACTED_MONGODB_URI]');
-  return safeMessage.replace(/mongodb(?:\+srv)?:\/\/[^\s"'<>]+/gi, '[REDACTED_MONGODB_URI]');
+export function databaseFailureCategory(error) {
+  const code = error?.code || error?.cause?.code;
+  if (code === 18 || /authentication failed|bad auth/i.test(error?.message || '')) return 'authentication';
+  if (['ENOTFOUND', 'EAI_AGAIN', 'ESERVFAIL', 'ECONNREFUSED', 'ETIMEOUT'].includes(code) && /srv|dns|query/i.test(error?.message || '')) return 'dns';
+  if (/certificate|tls|ssl/i.test(error?.message || '')) return 'tls';
+  if (/parse|scheme|invalid.*uri/i.test(error?.message || '')) return 'configuration';
+  return 'network_or_atlas_access';
 }
 
 export async function connectDB() {
+  if (mongoose.connection.readyState === 1) return mongoose.connection;
+  if (cache.promise) return cache.promise;
   const uri = process.env.MONGODB_URI?.trim();
-  if (!uri) {
-    if (isHosted()) {
-      throw new DatabaseUnavailableError('MONGODB_URI is not configured.');
+  if (!uri || !/^mongodb(?:\+srv)?:\/\//.test(uri)) {
+    console.error('MongoDB connection failed:', { category: 'configuration', variable: 'MONGODB_URI' });
+    throw new DatabaseUnavailableError('A valid MONGODB_URI is required.');
+  }
+  cache.promise = (async () => {
+    try {
+      await Promise.resolve().then(() => mongoose.connect(uri, {
+        serverSelectionTimeoutMS: 8000, connectTimeoutMS: 8000, waitQueueTimeoutMS: 8000,
+        maxPoolSize: 5, minPoolSize: 0, maxIdleTimeMS: 60000,
+      }));
+      return mongoose.connection;
+    } catch (error) {
+      // Categories only: driver messages can contain credentials or hosts.
+      console.error('MongoDB connection failed:', { category: databaseFailureCategory(error), name: error.name, code: error.code || error.cause?.code || null });
+      throw new DatabaseUnavailableError('MongoDB connection failed.');
+    } finally {
+      cache.promise = null;
     }
-    console.info('MONGODB_URI is not configured; using the development-only in-memory store.');
-    return null;
-  }
-
-  if (mongoose.connection.readyState === 1) {
-    connectionCache.failures = 0;
-    connectionCache.retryAfter = 0;
-    return mongoose.connection;
-  }
-  if (Date.now() < connectionCache.retryAfter) {
-    throw new DatabaseUnavailableError('MongoDB connection retry is cooling down.');
-  }
-
-  const cacheConnectionAttempt = (promise) => {
-    connectionCache.promise = promise
-      .then(() => {
-        connectionCache.failures = 0;
-        connectionCache.retryAfter = 0;
-        return mongoose.connection;
-      })
-      .catch((error) => {
-        connectionCache.promise = null;
-        connectionCache.failures += 1;
-        const delay = Math.min(30000, 1000 * 2 ** (connectionCache.failures - 1));
-        connectionCache.retryAfter = Date.now() + delay;
-        const safeMessage = redactMongoUri(error.message, uri);
-        console.error('MongoDB connection failed:', {
-          name: error.name,
-          code: error.code || error.cause?.code || null,
-          message: safeMessage,
-        });
-        throw new DatabaseUnavailableError('MongoDB connection failed.');
-      });
-  };
-
-  if (mongoose.connection.readyState === 2) {
-    if (!connectionCache.promise) {
-      cacheConnectionAttempt(mongoose.connection.asPromise());
-    }
-  } else {
-    connectionCache.promise = null;
-    cacheConnectionAttempt(
-      mongoose.connect(uri, {
-        serverSelectionTimeoutMS: 10000,
-        connectTimeoutMS: 10000,
-        maxPoolSize: 10,
-        minPoolSize: 0,
-      })
-    );
-  }
-
-  try {
-    return await connectionCache.promise;
-  } catch (error) {
-    if (error instanceof DatabaseUnavailableError) throw error;
-    throw new DatabaseUnavailableError('MongoDB connection failed.');
-  }
-}
-
-export function isDbConnected() {
-  if (mongoose.connection.readyState === 1) return true;
-  if (isHosted()) {
-    throw new DatabaseUnavailableError('MongoDB is unavailable; persistent operations cannot continue.');
-  }
-  return false;
+  })();
+  return cache.promise;
 }

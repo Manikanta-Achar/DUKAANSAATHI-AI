@@ -26,7 +26,7 @@ import {
 
 export default function Udhaar() {
   const {
-    customers,
+    customers: allCustomers,
     customersLoading,
     refreshCustomers,
     refreshDashboard,
@@ -37,6 +37,13 @@ export default function Udhaar() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('active'); // 'active' or 'archived'
 
+  const customers = allCustomers.filter((customer) => {
+    const matchesStatus = statusFilter === 'archived' ? customer.isArchived === true : customer.isArchived !== true;
+    const query = searchTerm.trim().toLowerCase();
+    return matchesStatus && (!query || customer.name.toLowerCase().includes(query) || (customer.phone || '').includes(query));
+  });
+  const activeCount = allCustomers.filter((customer) => customer.isArchived !== true).length;
+  const archivedCount = allCustomers.length - activeCount;
   // Customer Credit History Drawer
   const [selectedCustomerForHistory, setSelectedCustomerForHistory] = useState(null);
   const [customerHistoryList, setCustomerHistoryList] = useState([]);
@@ -70,7 +77,7 @@ export default function Udhaar() {
   // Reload customers whenever search or status filter changes
   useEffect(() => {
     refreshCustomers(searchTerm, statusFilter);
-  }, [searchTerm, statusFilter, refreshCustomers]);
+  }, [refreshCustomers]);
 
   // Open customer history ledger
   const handleOpenHistory = async (customer) => {
@@ -80,6 +87,7 @@ export default function Udhaar() {
       const res = await api.get(`/api/udhaar/customers/${customer._id}`);
       if (res.data?.success) {
         setCustomerHistoryList(res.data.data.history || []);
+        setSelectedCustomerForHistory(res.data.data);
       }
     } catch (err) {
       showToast('Could not load history: ' + (err.response?.data?.message || err.message), 'error');
@@ -212,6 +220,7 @@ export default function Udhaar() {
       return;
     }
 
+    if (actionType === 'repay' && val > Number(activeCustomer.totalUdhaar)) { showToast('Repayment cannot exceed the outstanding balance.', 'error'); return; }
     setSubmitting(true);
     try {
       const endpoint = actionType === 'credit' ? '/api/udhaar/credit' : '/api/udhaar/repay';
@@ -333,7 +342,7 @@ export default function Udhaar() {
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Active Customers ({statusFilter === 'active' ? customers.length : '...'})
+            Active Customers ({customersLoading ? '...' : activeCount})
           </button>
           <button
             onClick={() => setStatusFilter('archived')}
@@ -344,7 +353,7 @@ export default function Udhaar() {
             }`}
           >
             <Archive className="w-3.5 h-3.5" />
-            <span>Archived Customers</span>
+            <span>Archived Customers ({customersLoading ? '...' : archivedCount})</span>
           </button>
         </div>
 

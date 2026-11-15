@@ -4,19 +4,25 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "nodemon server.js",
+    "dev": "node --watch server.js",
     "start": "node server.js",
     "seed": "node scripts/seed.js",
+    "check:db": "node scripts/check-db.js",
+    "check:dns": "node scripts/check-dns.js",
+    "check:voice": "node scripts/check-voice.js",
+    "check:client-build": "node scripts/check-client-build.js",
+    "audit:legacy": "node scripts/audit-legacy.js",
     "test": "node --test"
   },
   "dependencies": {
     "@google/genai": "^3.3.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "mongoose": "^8.9.5"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "mongodb-memory-server": "^11.3.0"
   }
 }

@@ -1,1016 +1,309 @@
+import mongoose from 'mongoose';
+import { createHash } from 'node:crypto';
 import Customer from '../models/Customer.js';
 import Product from '../models/Product.js';
 import Transaction from '../models/Transaction.js';
-import { isDbConnected } from '../config/db.js';
+import Operation from '../models/Operation.js';
+import { connectDB } from '../config/db.js';
+import { fail, text, number, objectId, escapeRegex } from '../utils/validation.js';
+import { getInitialSeedData } from './seedData.js';
 
-// In-Memory store fallback when MongoDB is not connected
-const memoryStore = {
-  customers: [],
-  products: [],
-  transactions: [],
-  idCounter: 1000,
-  generateId() {
-    this.idCounter += 1;
-    return `mem_${Date.now()}_${this.idCounter}`;
-  },
-};
+const scope = (ownerId) => ({ ownerId: objectId(ownerId, 'Owner') });
+const byId = (ownerId, id) => ({ ...scope(ownerId), _id: objectId(id) });
+const money = (value) => Math.round(value * 100) / 100;
+const required = (record, label) => { if (!record) fail(`${label} not found.`, 404); return record; };
+const nameQuery = (name) => ({ $regex: `^${escapeRegex(text(name, 'Name'))}$`, $options: 'i' });
 
-// Initial default seed dataset for small Indian Kirana / Chai shop
-export function getInitialSeedData() {
-  const now = new Date();
-  const c1Id = 'cust_ramesh';
-  const c2Id = 'cust_suresh';
-  const c3Id = 'cust_anita';
-
-  const customers = [
-    {
-      _id: c1Id,
-      name: 'Ramesh',
-      phone: '9876543210',
-      totalUdhaar: 60,
-      isArchived: false,
-      archivedAt: null,
-      createdAt: new Date(now.getTime() - 86400000 * 2),
-      updatedAt: now,
-    },
-    {
-      _id: c2Id,
-      name: 'Suresh',
-      phone: '9845123456',
-      totalUdhaar: 150,
-      isArchived: false,
-      archivedAt: null,
-      createdAt: new Date(now.getTime() - 86400000 * 5),
-      updatedAt: now,
-    },
-    {
-      _id: c3Id,
-      name: 'Anita Sharma',
-      phone: '9811223344',
-      totalUdhaar: 0,
-      isArchived: false,
-      archivedAt: null,
-      createdAt: new Date(now.getTime() - 86400000 * 7),
-      updatedAt: now,
-    },
-  ];
-
-  const products = [
-    {
-      _id: 'prod_milk',
-      name: 'Amul Milk',
-      price: 32,
-      quantity: 15,
-      unit: 'packets',
-      lowStockThreshold: 10,
-      createdAt: new Date(now.getTime() - 86400000 * 4),
-      updatedAt: now,
-    },
-    {
-      _id: 'prod_sugar',
-      name: 'Tata Sugar',
-      price: 45,
-      quantity: 3,
-      unit: 'kg',
-      lowStockThreshold: 5,
-      createdAt: new Date(now.getTime() - 86400000 * 4),
-      updatedAt: now,
-    },
-    {
-      _id: 'prod_tea',
-      name: 'Red Label Tea',
-      price: 120,
-      quantity: 8,
-      unit: 'packets',
-      lowStockThreshold: 5,
-      createdAt: new Date(now.getTime() - 86400000 * 4),
-      updatedAt: now,
-    },
-    {
-      _id: 'prod_oil',
-      name: 'Fortune Mustard Oil',
-      price: 140,
-      quantity: 2,
-      unit: 'litres',
-      lowStockThreshold: 4,
-      createdAt: new Date(now.getTime() - 86400000 * 4),
-      updatedAt: now,
-    },
-    {
-      _id: 'prod_parle',
-      name: 'Parle-G Biscuits',
-      price: 10,
-      quantity: 25,
-      unit: 'packets',
-      lowStockThreshold: 10,
-      createdAt: new Date(now.getTime() - 86400000 * 4),
-      updatedAt: now,
-    },
-  ];
-
-  const transactions = [
-    {
-      _id: 'txn_init_1',
-      customerId: c1Id,
-      customerName: 'Ramesh',
-      productId: null,
-      productName: '',
-      type: 'credit',
-      amount: 100,
-      quantity: 0,
-      description: 'Morning groceries udhaar',
-      balanceAfter: 100,
-      isReversed: false,
-      createdAt: new Date(now.getTime() - 86400000 * 1.5),
-      updatedAt: new Date(now.getTime() - 86400000 * 1.5),
-    },
-    {
-      _id: 'txn_init_2',
-      customerId: c1Id,
-      customerName: 'Ramesh',
-      productId: null,
-      productName: '',
-      type: 'repayment',
-      amount: 40,
-      quantity: 0,
-      description: 'Evening cash repayment',
-      balanceAfter: 60,
-      isReversed: false,
-      createdAt: new Date(now.getTime() - 86400000 * 1),
-      updatedAt: new Date(now.getTime() - 86400000 * 1),
-    },
-    {
-      _id: 'txn_init_3',
-      customerId: null,
-      customerName: '',
-      productId: 'prod_milk',
-      productName: 'Amul Milk',
-      type: 'stock_adjustment',
-      amount: 0,
-      quantity: 20,
-      description: 'Morning dairy delivery stock add',
-      balanceAfter: 20,
-      isReversed: false,
-      createdAt: new Date(now.getTime() - 86400000 * 1),
-      updatedAt: new Date(now.getTime() - 86400000 * 1),
-    },
-    {
-      _id: 'txn_init_4',
-      customerId: null,
-      customerName: '',
-      productId: 'prod_milk',
-      productName: 'Amul Milk',
-      type: 'sale',
-      amount: 160,
-      quantity: -5,
-      description: 'Counter sale 5 packets milk',
-      balanceAfter: 15,
-      isReversed: false,
-      createdAt: new Date(now.getTime() - 86400000 * 0.5),
-      updatedAt: new Date(now.getTime() - 86400000 * 0.5),
-    },
-  ];
-
-  return { customers, products, transactions };
+async function atomic(work) {
+  await connectDB();
+  const session = await mongoose.startSession();
+  try { return await session.withTransaction(() => work(session)); }
+  finally { await session.endSession(); }
 }
 
-// Auto-seed in-memory store on first load
-function ensureMemoryInitialized() {
-  if (memoryStore.customers.length === 0 && memoryStore.products.length === 0) {
-    const seed = getInitialSeedData();
-    memoryStore.customers = seed.customers;
-    memoryStore.products = seed.products;
-    memoryStore.transactions = seed.transactions;
-  }
-}
-
-// ----------------- CUSTOMER SERVICES -----------------
-function escapeRegex(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-export async function getCustomers(search = '', status = 'active') {
-  if (isDbConnected()) {
-    const query = {};
-    if (status === 'archived') {
-      query.isArchived = true;
-    } else if (status === 'all') {
-      // all
-    } else {
-      query.isArchived = { $ne: true };
-    }
-
-    if (search && search.trim()) {
-      const q = search.trim();
-      query.$or = [
-        { name: { $regex: q, $options: 'i' } },
-        { phone: { $regex: q, $options: 'i' } },
-      ];
-    }
-
-    const list = await Customer.find(query).sort({ updatedAt: -1 }).lean();
-    const custIds = list.map((c) => c._id);
-    const counts = await Transaction.aggregate([
-      { $match: { customerId: { $in: custIds } } },
-      { $group: { _id: '$customerId', count: { $sum: 1 } } },
-    ]);
-    const countMap = {};
-    counts.forEach((c) => {
-      countMap[String(c._id)] = c.count;
-    });
-
-    return list.map((c) => ({
-      ...c,
-      transactionCount: countMap[String(c._id)] || 0,
-    }));
-  }
-
-  ensureMemoryInitialized();
-  const q = search.trim().toLowerCase();
-  return memoryStore.customers
-    .filter((c) => {
-      if (status === 'archived') {
-        if (!c.isArchived) return false;
-      } else if (status === 'all') {
-        // all
-      } else {
-        if (c.isArchived) return false;
-      }
-
-      if (q) {
-        return (
-          c.name.toLowerCase().includes(q) ||
-          (c.phone && c.phone.includes(q))
-        );
-      }
-      return true;
-    })
-    .map((c) => {
-      const count = memoryStore.transactions.filter(
-        (t) => String(t.customerId) === String(c._id)
-      ).length;
-      return { ...c, transactionCount: count };
-    })
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-}
-
-export async function getCustomerById(id) {
-  if (isDbConnected()) {
-    const customer = await Customer.findById(id).lean();
-    if (!customer) return null;
-    const history = await Transaction.find({ customerId: id }).sort({ createdAt: -1 }).lean();
-    return { ...customer, history, transactionCount: history.length };
-  }
-  ensureMemoryInitialized();
-  const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
-  if (!customer) return null;
-  const history = memoryStore.transactions
-    .filter((t) => String(t.customerId) === String(id))
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  return { ...customer, history, transactionCount: history.length };
-}
-
-export async function findCustomerByName(name) {
-  if (!name) return null;
-  const clean = name.trim().toLowerCase();
-  if (isDbConnected()) {
-    return await Customer.findOne({ name: { $regex: new RegExp(`^${escapeRegex(clean)}$`, 'i') } });
-  }
-  ensureMemoryInitialized();
-  return memoryStore.customers.find((c) => c.name.toLowerCase() === clean) || null;
-}
-
-export async function createCustomer({ name, phone = '' }) {
-  if (!name || !name.trim()) throw new Error('Customer name is required');
-  const cleanName = name.trim();
-
-  if (isDbConnected()) {
-    const existing = await Customer.findOne({
-      name: { $regex: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') },
-    });
-    if (existing) {
-      if (existing.isArchived) {
-        existing.isArchived = false;
-        existing.archivedAt = null;
-        await existing.save();
-      }
-      return existing;
-    }
-    const customer = new Customer({
-      name: cleanName,
-      phone: phone.trim(),
-      totalUdhaar: 0,
-      isArchived: false,
-      archivedAt: null,
-    });
-    return await customer.save();
-  }
-
-  ensureMemoryInitialized();
-  const existing = memoryStore.customers.find((c) => c.name.toLowerCase() === cleanName.toLowerCase());
-  if (existing) {
-    if (existing.isArchived) {
-      existing.isArchived = false;
-      existing.archivedAt = null;
-      existing.updatedAt = new Date();
-    }
-    return existing;
-  }
-
-  const newCust = {
-    _id: memoryStore.generateId(),
-    name: cleanName,
-    phone: phone.trim(),
-    totalUdhaar: 0,
-    isArchived: false,
-    archivedAt: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+// Store the response in the SAME transaction as the ledger mutation. No partial success.
+async function financialWrite(ownerId, key, input, work) {
+  text(key, 'Idempotency-Key', 128);
+  await connectDB();
+  await Operation.init();
+  const owner = scope(ownerId);
+  const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+  const replay = (operation) => {
+    if (operation.fingerprint !== fingerprint) fail('This request ID was already used for a different operation.', 409);
+    return operation.result;
   };
-  memoryStore.customers.push(newCust);
-  return newCust;
-}
-
-export async function updateCustomer(id, { name, phone = '' }) {
-  if (!name || !name.trim()) throw new Error('Customer name is required');
-  const cleanName = name.trim();
-  const cleanPhone = phone ? phone.trim() : '';
-
-  if (isDbConnected()) {
-    const customer = await Customer.findById(id);
-    if (!customer) throw new Error('Customer not found');
-    customer.name = cleanName;
-    customer.phone = cleanPhone;
-    await customer.save();
-
-    // Update customerName in Transaction records for audit consistency
-    await Transaction.updateMany({ customerId: id }, { customerName: cleanName });
-    return customer.toObject ? customer.toObject() : customer;
+  try {
+    return await atomic(async (session) => {
+      const previous = await Operation.findOne({ ...owner, key }).session(session);
+      if (previous) return replay(previous);
+      const result = await work(session);
+      const plain = JSON.parse(JSON.stringify(result));
+      await Operation.create([{ ...owner, key, fingerprint, result: plain }], { session });
+      return plain;
+    });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    const previous = await Operation.findOne({ ...owner, key });
+    if (!previous) throw error;
+    return replay(previous);
   }
-
-  ensureMemoryInitialized();
-  const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
-  if (!customer) throw new Error('Customer not found');
-  customer.name = cleanName;
-  customer.phone = cleanPhone;
-  customer.updatedAt = new Date();
-
-  memoryStore.transactions.forEach((t) => {
-    if (String(t.customerId) === String(id)) {
-      t.customerName = cleanName;
-    }
-  });
-  return customer;
 }
 
-export async function deleteCustomer(id) {
-  if (isDbConnected()) {
-    const customer = await Customer.findById(id);
-    if (!customer) throw new Error('Customer not found');
+export async function getCustomers(ownerId, search = '', status = 'active') {
+  await connectDB();
+  if (!['active', 'archived', 'all'].includes(status)) fail('Customer status is invalid.');
+  const query = scope(ownerId);
+  if (status !== 'all') query.isArchived = status === 'archived' ? true : { $ne: true };
+  const q = text(search, 'Search', 120, true);
+  if (q) query.$or = ['name', 'phone'].map((field) => ({ [field]: { $regex: escapeRegex(q), $options: 'i' } }));
+  const customers = await Customer.find(query).sort({ updatedAt: -1 }).lean();
+  const counts = await Transaction.aggregate([
+    { $match: { ...scope(ownerId), customerId: { $in: customers.map((customer) => customer._id) } } },
+    { $group: { _id: '$customerId', count: { $sum: 1 } } },
+  ]);
+  const countMap = new Map(counts.map((entry) => [String(entry._id), entry.count]));
+  return customers.map((customer) => ({ ...customer, isArchived: customer.isArchived === true, transactionCount: countMap.get(String(customer._id)) || 0 }));
+}
 
-    const txnCount = await Transaction.countDocuments({ customerId: id });
-    const hasBalance = Number(customer.totalUdhaar || 0) > 0;
+export async function getCustomerById(ownerId, id) {
+  await connectDB();
+  const customer = await Customer.findOne(byId(ownerId, id)).lean();
+  if (!customer) return null;
+  const history = await Transaction.find({ ...scope(ownerId), customerId: customer._id }).sort({ createdAt: -1 }).lean();
+  return { ...customer, isArchived: customer.isArchived === true, history, transactionCount: history.length };
+}
 
-    if (hasBalance || txnCount > 0) {
+export async function findCustomerByName(ownerId, name, session = null) {
+  await connectDB();
+  const matches = await Customer.find({ ...scope(ownerId), name: nameQuery(name) }).limit(2).session(session);
+  if (matches.length > 1) fail('Multiple customers match. Select the customer in the ledger.', 409);
+  return matches[0] || null;
+}
+
+export async function createCustomer(ownerId, { name, phone = '' }) {
+  await connectDB();
+  const cleanName = text(name, 'Customer name');
+  const cleanPhone = text(phone, 'Phone', 30, true);
+  if (await Customer.exists({ ...scope(ownerId), name: nameQuery(cleanName) })) fail('A customer with this name already exists. Restore them from Archived if needed.', 409);
+  return Customer.create({ ...scope(ownerId), name: cleanName, phone: cleanPhone });
+}
+
+export async function updateCustomer(ownerId, id, { name, phone = '' }) {
+  const cleanName = text(name, 'Customer name');
+  const cleanPhone = text(phone, 'Phone', 30, true);
+  return atomic(async (session) => {
+    const duplicate = await Customer.exists({ ...scope(ownerId), _id: { $ne: objectId(id) }, name: nameQuery(cleanName) }).session(session);
+    if (duplicate) fail('A customer with this name already exists.', 409);
+    const customer = required(await Customer.findOneAndUpdate(byId(ownerId, id), { $set: { name: cleanName, phone: cleanPhone } }, { session, new: true, runValidators: true }), 'Customer');
+    await Transaction.updateMany({ ...scope(ownerId), customerId: customer._id }, { $set: { customerName: cleanName } }, { session });
+    return customer;
+  });
+}
+
+export async function deleteCustomer(ownerId, id) {
+  return atomic(async (session) => {
+    const customer = required(await Customer.findOne(byId(ownerId, id)).session(session), 'Customer');
+    const hasHistory = await Transaction.exists({ ...scope(ownerId), customerId: customer._id }).session(session);
+    if (hasHistory || customer.totalUdhaar > 0) {
       customer.isArchived = true;
       customer.archivedAt = new Date();
-      await customer.save();
-      return {
-        success: true,
-        action: 'archived',
-        customer: customer.toObject ? customer.toObject() : customer,
-      };
+      await customer.save({ session });
+      return { action: 'archived', customer };
     }
-
-    const deletedCustomer = await Customer.findByIdAndDelete(id);
-    if (!deletedCustomer) throw new Error('Customer not found');
-    return { success: true, action: 'deleted', customer: deletedCustomer };
-  }
-
-  ensureMemoryInitialized();
-  const index = memoryStore.customers.findIndex((c) => String(c._id) === String(id));
-  if (index === -1) throw new Error('Customer not found');
-  const customer = memoryStore.customers[index];
-
-  const txnCount = memoryStore.transactions.filter((t) => String(t.customerId) === String(id)).length;
-  const hasBalance = Number(customer.totalUdhaar || 0) > 0;
-
-  if (hasBalance || txnCount > 0) {
-    customer.isArchived = true;
-    customer.archivedAt = new Date();
-    customer.updatedAt = new Date();
-    return { success: true, action: 'archived', customer };
-  }
-
-  const [removed] = memoryStore.customers.splice(index, 1);
-  return { success: true, action: 'deleted', customer: removed };
-}
-
-export async function archiveCustomer(id) {
-  if (isDbConnected()) {
-    const customer = await Customer.findById(id);
-    if (!customer) throw new Error('Customer not found');
-    customer.isArchived = true;
-    customer.archivedAt = new Date();
-    await customer.save();
-    return { success: true, action: 'archived', customer: customer.toObject ? customer.toObject() : customer };
-  }
-
-  ensureMemoryInitialized();
-  const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
-  if (!customer) throw new Error('Customer not found');
-  customer.isArchived = true;
-  customer.archivedAt = new Date();
-  customer.updatedAt = new Date();
-  return { success: true, action: 'archived', customer };
-}
-
-export async function unarchiveCustomer(id) {
-  if (isDbConnected()) {
-    const customer = await Customer.findById(id);
-    if (!customer) throw new Error('Customer not found');
-    customer.isArchived = false;
-    customer.archivedAt = null;
-    await customer.save();
-    return { success: true, action: 'unarchived', customer: customer.toObject ? customer.toObject() : customer };
-  }
-
-  ensureMemoryInitialized();
-  const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
-  if (!customer) throw new Error('Customer not found');
-  customer.isArchived = false;
-  customer.archivedAt = null;
-  customer.updatedAt = new Date();
-  return { success: true, action: 'unarchived', customer };
-}
-
-// ----------------- UDHAAR & REPAYMENT -----------------
-export async function addUdhaar({ customerId, customerName, amount, description = 'Credit added' }) {
-  const numericAmount = Number(amount);
-  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-    throw new Error('Valid udhaar amount greater than 0 is required');
-  }
-
-  let customer = null;
-  if (customerId) {
-    customer = isDbConnected()
-      ? await Customer.findById(customerId)
-      : memoryStore.customers.find((c) => String(c._id) === String(customerId));
-  } else if (customerName) {
-    customer = await findCustomerByName(customerName);
-  }
-
-  if (!customer) throw new Error('Customer not found');
-  if (customer.isArchived === true) throw new Error('Archived customers cannot receive new credit');
-
-  const newBalance = Number(customer.totalUdhaar || 0) + numericAmount;
-
-  if (isDbConnected()) {
-    customer.totalUdhaar = newBalance;
-    await customer.save();
-
-    const transaction = new Transaction({
-      customerId: customer._id,
-      customerName: customer.name,
-      type: 'credit',
-      amount: numericAmount,
-      quantity: 0,
-      description,
-      balanceAfter: newBalance,
-    });
-    await transaction.save();
-    return { customer, transaction };
-  }
-
-  ensureMemoryInitialized();
-  customer.totalUdhaar = newBalance;
-  customer.updatedAt = new Date();
-
-  const transaction = {
-    _id: memoryStore.generateId(),
-    customerId: customer._id,
-    customerName: customer.name,
-    productId: null,
-    productName: '',
-    type: 'credit',
-    amount: numericAmount,
-    quantity: 0,
-    description,
-    balanceAfter: newBalance,
-    isReversed: false,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  memoryStore.transactions.unshift(transaction);
-  return { customer, transaction };
-}
-
-export async function recordRepayment({ customerId, customerName, amount, description = 'Repayment received' }) {
-  const numericAmount = Number(amount);
-  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
-    throw new Error('Valid repayment amount greater than 0 is required');
-  }
-
-  let customer = null;
-  if (customerId) {
-    customer = isDbConnected()
-      ? await Customer.findById(customerId)
-      : memoryStore.customers.find((c) => String(c._id) === String(customerId));
-  } else if (customerName) {
-    customer = await findCustomerByName(customerName);
-  }
-
-  if (!customer) throw new Error(`Customer "${customerName || customerId}" not found for repayment`);
-  if (customer.isArchived === true) throw new Error('Archived customers cannot record repayments');
-
-  const currentBalance = Number(customer.totalUdhaar || 0);
-  const newBalance = Math.max(0, currentBalance - numericAmount);
-
-  if (isDbConnected()) {
-    customer.totalUdhaar = newBalance;
-    await customer.save();
-
-    const transaction = new Transaction({
-      customerId: customer._id,
-      customerName: customer.name,
-      type: 'repayment',
-      amount: numericAmount,
-      quantity: 0,
-      description,
-      balanceAfter: newBalance,
-    });
-    await transaction.save();
-    return { customer, transaction };
-  }
-
-  ensureMemoryInitialized();
-  customer.totalUdhaar = newBalance;
-  customer.updatedAt = new Date();
-
-  const transaction = {
-    _id: memoryStore.generateId(),
-    customerId: customer._id,
-    customerName: customer.name,
-    productId: null,
-    productName: '',
-    type: 'repayment',
-    amount: numericAmount,
-    quantity: 0,
-    description,
-    balanceAfter: newBalance,
-    isReversed: false,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  memoryStore.transactions.unshift(transaction);
-  return { customer, transaction };
-}
-
-// ----------------- INVENTORY SERVICES -----------------
-export async function getProducts(search = '') {
-  if (isDbConnected()) {
-    const query = search ? { name: { $regex: search, $options: 'i' } } : {};
-    return await Product.find(query).sort({ updatedAt: -1 }).lean();
-  }
-  ensureMemoryInitialized();
-  const q = search.trim().toLowerCase();
-  return memoryStore.products
-    .filter((p) => !q || p.name.toLowerCase().includes(q))
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-}
-
-export async function getProductById(id) {
-  if (isDbConnected()) {
-    return await Product.findById(id).lean();
-  }
-  ensureMemoryInitialized();
-  return memoryStore.products.find((p) => String(p._id) === String(id)) || null;
-}
-
-export async function findProductByName(name) {
-  if (!name) return null;
-  const clean = name.trim().toLowerCase();
-  if (isDbConnected()) {
-    const exact = await Product.findOne({
-      name: { $regex: new RegExp(`^${escapeRegex(clean)}$`, 'i') },
-    });
-    if (exact) return exact;
-
-    const partialMatches = await Product.find({
-      name: { $regex: escapeRegex(clean), $options: 'i' },
-    }).limit(2);
-    if (partialMatches.length === 1) return partialMatches[0];
-    if (partialMatches.length > 1) return null;
-
-    const tokens = clean.split(/\s+/).filter((token) => token.length > 1);
-    const tokenMatches = await Product.find({
-      $or: tokens.map((token) => ({ name: { $regex: escapeRegex(token), $options: 'i' } })),
-    }).limit(2);
-    return tokenMatches.length === 1 ? tokenMatches[0] : null;
-  }
-  ensureMemoryInitialized();
-  const exact = memoryStore.products.find((p) => p.name.toLowerCase() === clean);
-  if (exact) return exact;
-  const partialMatches = memoryStore.products.filter((p) => p.name.toLowerCase().includes(clean));
-  if (partialMatches.length === 1) return partialMatches[0];
-  if (partialMatches.length > 1) return null;
-  const tokens = clean.split(/\s+/).filter((token) => token.length > 1);
-  const tokenMatches = memoryStore.products.filter((p) =>
-    tokens.some((token) => p.name.toLowerCase().includes(token))
-  );
-  return tokenMatches.length === 1 ? tokenMatches[0] : null;
-}
-
-export async function createProduct({ name, price = 0, quantity = 0, unit = 'packets', lowStockThreshold = 5 }) {
-  if (!name || !name.trim()) throw new Error('Product name is required');
-  const cleanName = name.trim();
-  const pPrice = Math.max(0, Number(price) || 0);
-  const pQty = Math.max(0, Number(quantity) || 0);
-  const pThreshold = Math.max(0, Number(lowStockThreshold) || 5);
-
-  if (isDbConnected()) {
-    const existing = await Product.findOne({ name: { $regex: new RegExp(`^${cleanName}$`, 'i') } });
-    if (existing) {
-      existing.quantity += pQty;
-      if (pPrice > 0) existing.price = pPrice;
-      await existing.save();
-      return existing;
-    }
-    const product = new Product({
-      name: cleanName,
-      price: pPrice,
-      quantity: pQty,
-      unit: unit || 'packets',
-      lowStockThreshold: pThreshold,
-    });
-    return await product.save();
-  }
-
-  ensureMemoryInitialized();
-  const existing = memoryStore.products.find((p) => p.name.toLowerCase() === cleanName.toLowerCase());
-  if (existing) {
-    existing.quantity += pQty;
-    if (pPrice > 0) existing.price = pPrice;
-    existing.updatedAt = new Date();
-    return existing;
-  }
-
-  const newProd = {
-    _id: memoryStore.generateId(),
-    name: cleanName,
-    price: pPrice,
-    quantity: pQty,
-    unit: unit || 'packets',
-    lowStockThreshold: pThreshold,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  memoryStore.products.push(newProd);
-  return newProd;
-}
-
-export async function updateProduct(id, updates) {
-  if (isDbConnected()) {
-    const product = await Product.findByIdAndUpdate(id, updates, { new: true }).lean();
-    if (!product) throw new Error('Product not found');
-    return product;
-  }
-  ensureMemoryInitialized();
-  const index = memoryStore.products.findIndex((p) => String(p._id) === String(id));
-  if (index === -1) throw new Error('Product not found');
-  memoryStore.products[index] = {
-    ...memoryStore.products[index],
-    ...updates,
-    updatedAt: new Date(),
-  };
-  return memoryStore.products[index];
-}
-
-export async function deleteProduct(id) {
-  if (isDbConnected()) {
-    const product = await Product.findByIdAndDelete(id);
-    if (!product) throw new Error('Product not found');
-    return product;
-  }
-  ensureMemoryInitialized();
-  const index = memoryStore.products.findIndex((p) => String(p._id) === String(id));
-  if (index === -1) throw new Error('Product not found');
-  const removed = memoryStore.products.splice(index, 1)[0];
-  return removed;
-}
-
-export async function adjustStock({ productId, productName, quantityDelta, isSale = false, reason = '' }) {
-  const delta = Number(quantityDelta);
-  if (!Number.isFinite(delta) || delta === 0) throw new Error('Quantity change must be non-zero');
-
-  let product = null;
-  if (productId) {
-    product = isDbConnected()
-      ? await Product.findById(productId)
-      : memoryStore.products.find((p) => String(p._id) === String(productId));
-  } else if (productName) {
-    product = await findProductByName(productName);
-  }
-
-  if (!product) throw new Error(`Product "${productName || productId}" not found in inventory`);
-
-  const currentQty = Number(product.quantity || 0);
-  const targetQty = currentQty + delta;
-
-  if (targetQty < 0) {
-    throw new Error(`Insufficient stock for "${product.name}". Available: ${currentQty}, Requested change: ${delta}`);
-  }
-
-  const txnType = isSale ? 'sale' : 'stock_adjustment';
-  const txnAmount = isSale ? Math.abs(delta) * Number(product.price || 0) : 0;
-  const defaultDesc = delta > 0 ? `Added ${delta} ${product.unit}` : `Reduced ${Math.abs(delta)} ${product.unit}`;
-
-  if (isDbConnected()) {
-    product.quantity = targetQty;
-    await product.save();
-
-    const transaction = new Transaction({
-      productId: product._id,
-      productName: product.name,
-      type: txnType,
-      amount: txnAmount,
-      quantity: delta,
-      description: reason || defaultDesc,
-      balanceAfter: targetQty,
-    });
-    await transaction.save();
-    return { product, transaction };
-  }
-
-  ensureMemoryInitialized();
-  product.quantity = targetQty;
-  product.updatedAt = new Date();
-
-  const transaction = {
-    _id: memoryStore.generateId(),
-    customerId: null,
-    customerName: '',
-    productId: product._id,
-    productName: product.name,
-    type: txnType,
-    amount: txnAmount,
-    quantity: delta,
-    description: reason || defaultDesc,
-    balanceAfter: targetQty,
-    isReversed: false,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  memoryStore.transactions.unshift(transaction);
-  return { product, transaction };
-}
-
-// ----------------- TRANSACTIONS & REVERSAL -----------------
-export async function getTransactions(filters = {}) {
-  const { type, search, limit = 50 } = filters;
-
-  if (isDbConnected()) {
-    const query = {};
-    if (type && type !== 'all') query.type = type;
-    if (search) {
-      query.$or = [
-        { customerName: { $regex: search, $options: 'i' } },
-        { productName: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-      ];
-    }
-    return await Transaction.find(query).sort({ createdAt: -1 }).limit(Number(limit)).lean();
-  }
-
-  ensureMemoryInitialized();
-  let list = [...memoryStore.transactions];
-  if (type && type !== 'all') {
-    list = list.filter((t) => t.type === type);
-  }
-  if (search) {
-    const q = search.toLowerCase();
-    list = list.filter(
-      (t) =>
-        (t.customerName && t.customerName.toLowerCase().includes(q)) ||
-        (t.productName && t.productName.toLowerCase().includes(q)) ||
-        (t.description && t.description.toLowerCase().includes(q))
-    );
-  }
-  return list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, Number(limit));
-}
-
-export async function reverseTransaction(transactionId, reason = 'Entry correction') {
-  if (isDbConnected()) {
-    const txn = await Transaction.findById(transactionId);
-    if (!txn) throw new Error('Transaction not found');
-    if (txn.isReversed) throw new Error('Transaction has already been reversed');
-
-    // Revert impact
-    if (txn.type === 'credit' && txn.customerId) {
-      const cust = await Customer.findById(txn.customerId);
-      if (cust) {
-        cust.totalUdhaar = Math.max(0, cust.totalUdhaar - txn.amount);
-        await cust.save();
-      }
-    } else if (txn.type === 'repayment' && txn.customerId) {
-      const cust = await Customer.findById(txn.customerId);
-      if (cust) {
-        cust.totalUdhaar += txn.amount;
-        await cust.save();
-      }
-    } else if ((txn.type === 'stock_adjustment' || txn.type === 'sale') && txn.productId) {
-      const prod = await Product.findById(txn.productId);
-      if (prod) {
-        prod.quantity = Math.max(0, prod.quantity - txn.quantity);
-        await prod.save();
-      }
-    }
-
-    txn.isReversed = true;
-    txn.reversedAt = new Date();
-    txn.reverseReason = reason;
-    await txn.save();
-    return txn;
-  }
-
-  ensureMemoryInitialized();
-  const txn = memoryStore.transactions.find((t) => String(t._id) === String(transactionId));
-  if (!txn) throw new Error('Transaction not found');
-  if (txn.isReversed) throw new Error('Transaction has already been reversed');
-
-  if (txn.type === 'credit' && txn.customerId) {
-    const cust = memoryStore.customers.find((c) => String(c._id) === String(txn.customerId));
-    if (cust) cust.totalUdhaar = Math.max(0, cust.totalUdhaar - txn.amount);
-  } else if (txn.type === 'repayment' && txn.customerId) {
-    const cust = memoryStore.customers.find((c) => String(c._id) === String(txn.customerId));
-    if (cust) cust.totalUdhaar += txn.amount;
-  } else if ((txn.type === 'stock_adjustment' || txn.type === 'sale') && txn.productId) {
-    const prod = memoryStore.products.find((p) => String(p._id) === String(txn.productId));
-    if (prod) prod.quantity = Math.max(0, prod.quantity - txn.quantity);
-  }
-
-  txn.isReversed = true;
-  txn.reversedAt = new Date();
-  txn.reverseReason = reason;
-  return txn;
-}
-
-// ----------------- DASHBOARD METRICS -----------------
-export async function getDashboardStats() {
-  const dbConnected = isDbConnected();
-  const [customers, products] = await Promise.all([getCustomers(), getProducts()]);
-
-  const startOfPeriod = new Date();
-  startOfPeriod.setUTCHours(0, 0, 0, 0);
-  startOfPeriod.setUTCDate(startOfPeriod.getUTCDate() - 6);
-
-  let recentTransactions;
-  let totalSales;
-  let activityTransactions;
-  if (dbConnected) {
-    const [recent, sales, activity] = await Promise.all([
-      getTransactions({ limit: 6 }),
-      Transaction.aggregate([
-        { $match: { type: 'sale', isReversed: { $ne: true } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } },
-      ]),
-      Transaction.find({
-        createdAt: { $gte: startOfPeriod },
-        isReversed: { $ne: true },
-      })
-        .select('type amount createdAt')
-        .lean(),
-    ]);
-    recentTransactions = recent;
-    totalSales = Number(sales[0]?.total) || 0;
-    activityTransactions = activity;
-  } else {
-    ensureMemoryInitialized();
-    const transactions = memoryStore.transactions;
-    recentTransactions = await getTransactions({ limit: 6 });
-    totalSales = transactions
-      .filter((transaction) => transaction.type === 'sale' && !transaction.isReversed)
-      .reduce((sum, transaction) => sum + (Number(transaction.amount) || 0), 0);
-    activityTransactions = transactions.filter(
-      (transaction) => new Date(transaction.createdAt) >= startOfPeriod && !transaction.isReversed
-    );
-  }
-
-  // Outstanding Udhaar: Sum of all customers' totalUdhaar
-  const outstandingUdhaar = customers.reduce((sum, c) => sum + (Number(c.totalUdhaar) || 0), 0);
-
-  // Total customers count
-  const totalCustomers = customers.length;
-
-  // Low stock products count & items
-  const lowStockItems = products.filter((p) => Number(p.quantity) <= Number(p.lowStockThreshold));
-  const lowStockCount = lowStockItems.length;
-
-  // Recent transactions (last 6)
-  // Daily activity for the past 7 days
-  const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const now = new Date();
-  const dailyMap = {};
-
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const dayName = daysOfWeek[d.getDay()];
-    const dateKey = d.toISOString().split('T')[0];
-    dailyMap[dateKey] = {
-      day: dayName,
-      date: dateKey,
-      sales: 0,
-      udhaar: 0,
-      repayments: 0,
-    };
-  }
-
-  activityTransactions.forEach((t) => {
-    const dateKey = new Date(t.createdAt).toISOString().split('T')[0];
-    if (dailyMap[dateKey]) {
-      if (t.type === 'sale') {
-        dailyMap[dateKey].sales += Number(t.amount) || 0;
-      } else if (t.type === 'credit') {
-        dailyMap[dateKey].udhaar += Number(t.amount) || 0;
-      } else if (t.type === 'repayment') {
-        dailyMap[dateKey].repayments += Number(t.amount) || 0;
-      }
-    }
+    const result = await Customer.deleteOne(byId(ownerId, id), { session });
+    if (result.deletedCount !== 1) fail('Customer could not be deleted.', 409);
+    return { action: 'deleted', customer };
   });
+}
 
-  const dailySales = Object.values(dailyMap);
+async function setArchived(ownerId, id, archived) {
+  await connectDB();
+  const customer = required(await Customer.findOneAndUpdate(byId(ownerId, id), { $set: { isArchived: archived, archivedAt: archived ? new Date() : null } }, { new: true, runValidators: true }), 'Customer');
+  return { action: archived ? 'archived' : 'unarchived', customer };
+}
+export const archiveCustomer = (ownerId, id) => setArchived(ownerId, id, true);
+export const unarchiveCustomer = (ownerId, id) => setArchived(ownerId, id, false);
 
+async function customerTransaction(ownerId, input, type) {
+  const amount = number(input.amount, 'Amount', 0.01);
+  const description = text(input.description, 'Description', 500, true) || (type === 'credit' ? 'Credit added' : 'Repayment received');
+  return financialWrite(ownerId, input.requestKey, { type, customerId: input.customerId, customerName: input.customerName, amount, description }, async (session) => {
+    const customer = required(input.customerId
+      ? await Customer.findOne(byId(ownerId, input.customerId)).session(session)
+      : await findCustomerByName(ownerId, input.customerName, session), 'Customer');
+    if (customer.isArchived === true) fail('Restore this archived customer before recording transactions.', 409);
+    if (type === 'repayment' && amount > customer.totalUdhaar) fail('Repayment cannot exceed the outstanding balance.');
+    customer.totalUdhaar = money(customer.totalUdhaar + (type === 'credit' ? amount : -amount));
+    if (customer.totalUdhaar > 1e10) fail('Balance is too large.');
+    await customer.save({ session });
+    const [transaction] = await Transaction.create([{ ...scope(ownerId), customerId: customer._id, customerName: customer.name, type, amount, description, balanceAfter: customer.totalUdhaar }], { session });
+    return { customer, transaction };
+  });
+}
+export const addUdhaar = (ownerId, input) => customerTransaction(ownerId, input, 'credit');
+export const recordRepayment = (ownerId, input) => customerTransaction(ownerId, input, 'repayment');
+
+export async function getProducts(ownerId, search = '') {
+  await connectDB();
+  const query = scope(ownerId);
+  const q = text(search, 'Search', 120, true);
+  if (q) query.name = { $regex: escapeRegex(q), $options: 'i' };
+  return Product.find(query).sort({ updatedAt: -1 }).lean();
+}
+export async function getProductById(ownerId, id) {
+  await connectDB();
+  return Product.findOne(byId(ownerId, id)).lean();
+}
+export async function findProductByName(ownerId, name, session = null) {
+  await connectDB();
+  const clean = text(name, 'Product name').toLowerCase();
+  const exact = await Product.find({ ...scope(ownerId), name: nameQuery(clean) }).limit(2).session(session);
+  if (exact.length === 1) return exact[0];
+  const tokens = clean.split(/\s+/).filter((token) => token.length > 1);
+  if (!tokens.length) return null;
+  const matches = await Product.find({ ...scope(ownerId), $or: tokens.map((token) => ({ name: { $regex: escapeRegex(token), $options: 'i' } })) }).limit(2).session(session);
+  if (matches.length > 1) fail('Multiple products match. Use the full product name.', 409);
+  return matches[0] || null;
+}
+function productFields(input, partial = false) {
+  const fields = {};
+  for (const [field, fallback] of Object.entries({ name: '', price: 0, quantity: 0, unit: 'packets', lowStockThreshold: 5 })) {
+    if (partial && input[field] === undefined) continue;
+    const value = input[field] ?? fallback;
+    fields[field] = ['name', 'unit'].includes(field) ? text(value, field) : number(value, field);
+  }
+  return fields;
+}
+export async function createProduct(ownerId, input) {
+  await connectDB();
+  const fields = productFields(input);
+  if (await Product.exists({ ...scope(ownerId), name: nameQuery(fields.name) })) fail('Product already exists. Use Add Stock to change its quantity.', 409);
+  return Product.create({ ...scope(ownerId), ...fields });
+}
+export async function updateProduct(ownerId, id, input) {
+  const fields = productFields(input, true); // Never accept ownerId or MongoDB operators.
+  return atomic(async (session) => {
+    const product = required(await Product.findOne(byId(ownerId, id)).session(session), 'Product');
+    if (fields.name && await Product.exists({ ...scope(ownerId), _id: { $ne: product._id }, name: nameQuery(fields.name) }).session(session)) fail('Product name already exists.', 409);
+    const delta = money((fields.quantity ?? product.quantity) - product.quantity);
+    product.set(fields);
+    await product.save({ session });
+    if (delta) await Transaction.create([{ ...scope(ownerId), productId: product._id, productName: product.name, type: 'stock_adjustment', quantity: delta, balanceAfter: product.quantity, description: 'Stock corrected from inventory editor' }], { session });
+    return product;
+  });
+}
+export async function deleteProduct(ownerId, id) {
+  return atomic(async (session) => {
+    const product = required(await Product.findOne(byId(ownerId, id)).session(session), 'Product');
+    if (await Transaction.exists({ ...scope(ownerId), productId: product._id }).session(session)) fail('Products with transaction history must be kept for audit and reversal.', 409);
+    const result = await Product.deleteOne(byId(ownerId, id), { session });
+    if (result.deletedCount !== 1) fail('Product could not be deleted.', 409);
+    return product;
+  });
+}
+export async function adjustStock(ownerId, input) {
+  const delta = number(input.quantityDelta, 'Quantity change', -1e10);
+  if (!delta) fail('Quantity change must be non-zero.');
+  if (input.isSale !== undefined && typeof input.isSale !== 'boolean') fail('Sale flag is invalid.');
+  if (input.isSale && delta >= 0) fail('A sale must reduce stock.');
+  const reason = text(input.reason, 'Reason', 500, true);
+  return financialWrite(ownerId, input.requestKey, { type: 'stock', productId: input.productId, productName: input.productName, delta, isSale: input.isSale === true, reason }, async (session) => {
+    const product = required(input.productId ? await Product.findOne(byId(ownerId, input.productId)).session(session) : await findProductByName(ownerId, input.productName, session), 'Product');
+    const target = money(product.quantity + delta);
+    if (target < 0) fail(`Insufficient stock. Available: ${product.quantity}.`);
+    if (target > 1e10) fail('Stock quantity is too large.');
+    product.quantity = target;
+    await product.save({ session });
+    const [transaction] = await Transaction.create([{ ...scope(ownerId), productId: product._id, productName: product.name, type: input.isSale ? 'sale' : 'stock_adjustment', amount: input.isSale ? money(Math.abs(delta) * product.price) : 0, quantity: delta, description: reason || `Stock change: ${delta} ${product.unit}`, balanceAfter: target }], { session });
+    return { product, transaction };
+  });
+}
+
+export async function getTransactions(ownerId, { type, search = '', limit = 50, page = 1 } = {}) {
+  await connectDB();
+  const query = scope(ownerId);
+  if (type && type !== 'all') {
+    if (!['credit', 'repayment', 'sale', 'stock_adjustment'].includes(type)) fail('Transaction type is invalid.');
+    query.type = type;
+  }
+  const q = text(search, 'Search', 120, true);
+  if (q) query.$or = ['customerName', 'productName', 'description'].map((field) => ({ [field]: { $regex: escapeRegex(q), $options: 'i' } }));
+  const count = number(limit, 'Limit', 1);
+  if (!Number.isInteger(count) || count > 500) fail('Limit must be an integer from 1 to 500.');
+  const pageNumber = number(page, 'Page', 1);
+  if (!Number.isInteger(pageNumber) || pageNumber > 1000000) fail('Page is invalid.');
+  return Transaction.find(query).sort({ createdAt: -1, _id: -1 }).skip((pageNumber - 1) * count).limit(count).lean();
+}
+export async function reverseTransaction(ownerId, id, reason = 'Entry correction', requestKey) {
+  const cleanReason = text(reason, 'Reason', 500);
+  return financialWrite(ownerId, requestKey, { type: 'reverse', id, reason: cleanReason }, async (session) => {
+    const transaction = required(await Transaction.findOne(byId(ownerId, id)).session(session), 'Transaction');
+    if (transaction.isReversed) fail('Transaction has already been reversed.', 409);
+    if (transaction.customerId) {
+      const customer = required(await Customer.findOne(byId(ownerId, transaction.customerId)).session(session), 'Customer');
+      if (customer.isArchived === true) fail('Restore this customer before reversing a transaction.', 409);
+      const balance = money(customer.totalUdhaar + (transaction.type === 'credit' ? -transaction.amount : transaction.amount));
+      if (balance < 0) fail('Reverse the later repayments first; this reversal would make the balance negative.', 409);
+      customer.totalUdhaar = balance;
+      await customer.save({ session });
+    } else if (transaction.productId) {
+      const product = required(await Product.findOne(byId(ownerId, transaction.productId)).session(session), 'Product');
+      const quantity = money(product.quantity - transaction.quantity);
+      if (quantity < 0) fail('This reversal would make stock negative. Reverse later reductions first.', 409);
+      product.quantity = quantity;
+      await product.save({ session });
+    }
+    transaction.isReversed = true;
+    transaction.reversedAt = new Date();
+    transaction.reverseReason = cleanReason;
+    await transaction.save({ session });
+    return transaction;
+  });
+}
+
+export async function getDashboardStats(ownerId) {
+  await connectDB();
+  const owner = scope(ownerId);
+  const [customers, products, recentTransactions, sales] = await Promise.all([
+    Customer.find(owner).lean(), getProducts(ownerId), getTransactions(ownerId, { limit: 6 }),
+    Transaction.aggregate([{ $match: { ...owner, type: 'sale', isReversed: { $ne: true } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
+  ]);
+  const dateKey = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+  const today = dateKey(new Date());
+  const start = new Date(`${today}T00:00:00+05:30`);
+  start.setTime(start.getTime() - 6 * 86400000);
+  const dailySales = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date(start.getTime() + i * 86400000);
+    return { day: new Intl.DateTimeFormat('en', { weekday: 'short', timeZone: 'Asia/Kolkata' }).format(date), date: dateKey(date), sales: 0, udhaar: 0, repayments: 0 };
+  });
+  const dailyMap = new Map(dailySales.map((day) => [day.date, day]));
+  const activity = await Transaction.find({ ...owner, createdAt: { $gte: start }, isReversed: { $ne: true } }).select('type amount createdAt').lean();
+  for (const transaction of activity) {
+    const day = dailyMap.get(dateKey(transaction.createdAt));
+    const field = { sale: 'sales', credit: 'udhaar', repayment: 'repayments' }[transaction.type];
+    if (day && field) day[field] = money(day[field] + transaction.amount);
+  }
+  const lowStockItems = products.filter((product) => product.quantity <= product.lowStockThreshold);
   return {
-    totalSales,
-    outstandingUdhaar,
-    totalCustomers,
-    lowStockCount,
-    lowStockItems,
-    recentTransactions,
-    dailySales,
+    totalSales: money(sales[0]?.total || 0),
+    outstandingUdhaar: money(customers.reduce((sum, customer) => sum + (customer.totalUdhaar || 0), 0)),
+    totalCustomers: customers.filter((customer) => customer.isArchived !== true).length,
+    archivedCustomers: customers.filter((customer) => customer.isArchived === true).length,
+    lowStockCount: lowStockItems.length, lowStockItems, recentTransactions, dailySales,
   };
 }
 
-// ----------------- SEED DATA SERVICE -----------------
-export async function seedDatabase(force = false) {
-  const seed = getInitialSeedData();
-
-  if (isDbConnected()) {
-    const custCount = await Customer.countDocuments();
-    if (custCount > 0 && !force) {
-      return { message: 'Database already has records; seed skipped (set force=true to reload).' };
+// Append sample data only to an explicitly selected empty shop. Never reset data.
+export async function seedDatabase(ownerId) {
+  return atomic(async (session) => {
+    const owner = scope(ownerId);
+    for (const Model of [Customer, Product, Transaction]) {
+      if (await Model.exists(owner).session(session)) fail('Demo data can only be added to an empty shop.', 409);
     }
-
-    if (force) {
-      await Customer.deleteMany({});
-      await Product.deleteMany({});
-      await Transaction.deleteMany({});
-    }
-
-    const createdCusts = await Customer.insertMany(
-      seed.customers.map((c) => ({
-        name: c.name,
-        phone: c.phone,
-        totalUdhaar: c.totalUdhaar,
-        isArchived: false,
-        archivedAt: null,
-      }))
-    );
-    const custMap = {};
-    createdCusts.forEach((c) => (custMap[c.name] = c._id));
-
-    const createdProds = await Product.insertMany(
-      seed.products.map((p) => ({
-        name: p.name,
-        price: p.price,
-        quantity: p.quantity,
-        unit: p.unit,
-        lowStockThreshold: p.lowStockThreshold,
-      }))
-    );
-    const prodMap = {};
-    createdProds.forEach((p) => (prodMap[p.name] = p._id));
-
-    const txnsToInsert = seed.transactions.map((t) => ({
-      customerId: custMap[t.customerName] || null,
-      productId: prodMap[t.productName] || null,
-      customerName: t.customerName,
-      productName: t.productName,
-      type: t.type,
-      amount: t.amount,
-      quantity: t.quantity,
-      description: t.description,
-      balanceAfter: t.balanceAfter,
-    }));
-    await Transaction.insertMany(txnsToInsert);
-
-    return { message: 'Demo seed data successfully loaded into MongoDB!' };
-  }
-
-  // In-memory seed
-  memoryStore.customers = seed.customers;
-  memoryStore.products = seed.products;
-  memoryStore.transactions = seed.transactions;
-  return { message: 'Demo seed data successfully loaded into In-Memory Store!' };
+    const seed = getInitialSeedData();
+    const customers = await Customer.insertMany(seed.customers.map(({ _id, ...record }) => ({ ...record, ...owner })), { session });
+    const products = await Product.insertMany(seed.products.map(({ _id, ...record }) => ({ ...record, ...owner })), { session });
+    await Transaction.insertMany(seed.transactions.map(({ _id, ...record }) => ({ ...record, ...owner, customerId: customers.find((customer) => customer.name === record.customerName)?._id || null, productId: products.find((product) => product.name === record.productName)?._id || null })), { session });
+    return { message: 'Sample data added to your empty shop.' };
+  });
 }

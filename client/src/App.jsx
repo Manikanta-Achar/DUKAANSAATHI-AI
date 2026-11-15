@@ -1,4 +1,7 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext.jsx';
+import Login from './pages/Login.jsx';
+import Register from './pages/Register.jsx';
 import { ShopProvider, useShop } from './context/ShopContext.jsx';
 import Navbar from './components/Navbar.jsx';
 import Sidebar from './components/Sidebar.jsx';
@@ -47,10 +50,15 @@ function AppContent() {
   );
 }
 
-export default function App() {
-  return (
-    <ShopProvider>
-      <AppContent />
-    </ShopProvider>
-  );
+function AuthenticatedApp() {
+  const { user, loading, error, restoreSession } = useAuth();
+  const location = useLocation();
+  if (loading) return <div role="status" className="min-h-screen grid place-items-center bg-slate-50 text-emerald-800">Restoring your session...</div>;
+  if (error) return <div className="min-h-screen grid place-items-center bg-slate-50 p-6"><div role="alert" className="text-center text-slate-700"><p>{error}</p><button onClick={restoreSession} className="mt-4 px-4 py-2 rounded-xl bg-emerald-700 text-white">Try again</button></div></div>;
+  return <Routes>
+    <Route path="/login" element={<Login />} />
+    <Route path="/register" element={<Register />} />
+    <Route path="/*" element={user ? <ShopProvider key={user.id}><AppContent /></ShopProvider> : <Navigate to="/login" state={{ from: location.pathname }} replace />} />
+  </Routes>;
 }
+export default function App() { return <AuthProvider><AuthenticatedApp /></AuthProvider>; }

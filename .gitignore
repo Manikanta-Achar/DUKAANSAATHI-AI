@@ -6,3 +6,7 @@ dist/
 build/
 .vite/
 *.log
+.npm-cache/
+.cache/
+test-results/
+playwright-report/

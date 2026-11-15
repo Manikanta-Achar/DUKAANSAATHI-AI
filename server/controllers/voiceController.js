@@ -12,7 +12,7 @@ import { sendApiError } from '../utils/apiErrors.js';
 export const processVoice = async (req, res) => {
   try {
     const { transcript, language } = req.body;
-    if (!transcript || !transcript.trim()) {
+    if (typeof transcript !== 'string' || !transcript.trim() || transcript.length > 1000) {
       return res.status(400).json({ success: false, message: 'Voice transcript is required' });
     }
 
@@ -23,11 +23,11 @@ export const processVoice = async (req, res) => {
     let productContext = null;
 
     if (proposedAction.customerName) {
-      customerContext = await findCustomerByName(proposedAction.customerName);
+      customerContext = await findCustomerByName(req.user._id, proposedAction.customerName);
       if (customerContext?.isArchived) customerContext = null;
     }
     if (proposedAction.productName) {
-      productContext = await findProductByName(proposedAction.productName);
+      productContext = await findProductByName(req.user._id, proposedAction.productName);
     }
 
     return res.json({
@@ -58,6 +58,7 @@ export const processVoice = async (req, res) => {
 
 export const executeVoiceAction = async (req, res) => {
   try {
+    if (req.body.confirmed !== true) return res.status(400).json({ success: false, message: 'Confirm the command preview before saving.' });
     const { action, customerName, amount, productName, quantity, unit, description } = req.body;
 
     if (!action) {
@@ -74,11 +75,11 @@ export const executeVoiceAction = async (req, res) => {
         if (!cleanCustomerName || !Number.isFinite(numericAmount) || numericAmount <= 0) {
           return res.status(400).json({ success: false, message: 'Valid customer name and amount are required' });
         }
-        const customer = await findCustomerByName(cleanCustomerName);
+        const customer = await findCustomerByName(req.user._id, cleanCustomerName);
         if (!customer || customer.isArchived) {
           return res.status(404).json({ success: false, message: 'Active customer not found' });
         }
-        result = await addUdhaar({
+        result = await addUdhaar(req.user._id, { requestKey: req.get('Idempotency-Key'),
           customerId: customer._id,
           customerName: customer.name,
           amount: numericAmount,
@@ -94,11 +95,11 @@ export const executeVoiceAction = async (req, res) => {
         if (!cleanCustomerName || !Number.isFinite(numericAmount) || numericAmount <= 0) {
           return res.status(400).json({ success: false, message: 'Valid customer name and amount are required' });
         }
-        const customer = await findCustomerByName(cleanCustomerName);
+        const customer = await findCustomerByName(req.user._id, cleanCustomerName);
         if (!customer || customer.isArchived) {
           return res.status(404).json({ success: false, message: 'Active customer not found' });
         }
-        result = await recordRepayment({
+        result = await recordRepayment(req.user._id, { requestKey: req.get('Idempotency-Key'),
           customerId: customer._id,
           customerName: customer.name,
           amount: numericAmount,
@@ -114,11 +115,11 @@ export const executeVoiceAction = async (req, res) => {
         if (!cleanProductName || !Number.isFinite(numericQuantity) || numericQuantity <= 0) {
           return res.status(400).json({ success: false, message: 'Valid product name and quantity are required' });
         }
-        const product = await findProductByName(cleanProductName);
+        const product = await findProductByName(req.user._id, cleanProductName);
         if (!product) {
           return res.status(404).json({ success: false, message: 'Product not found in inventory' });
         }
-        result = await adjustStock({
+        result = await adjustStock(req.user._id, { requestKey: req.get('Idempotency-Key'),
           productId: product._id,
           quantityDelta: numericQuantity,
           isSale: false,
@@ -134,11 +135,11 @@ export const executeVoiceAction = async (req, res) => {
         if (!cleanProductName || !Number.isFinite(numericQuantity) || numericQuantity <= 0) {
           return res.status(400).json({ success: false, message: 'Valid product name and quantity are required' });
         }
-        const product = await findProductByName(cleanProductName);
+        const product = await findProductByName(req.user._id, cleanProductName);
         if (!product) {
           return res.status(404).json({ success: false, message: 'Product not found in inventory' });
         }
-        result = await adjustStock({
+        result = await adjustStock(req.user._id, { requestKey: req.get('Idempotency-Key'),
           productId: product._id,
           quantityDelta: -numericQuantity,
           isSale: false,
@@ -149,7 +150,7 @@ export const executeVoiceAction = async (req, res) => {
       }
 
       case 'QUERY_UDHAAR': {
-        const stats = await getDashboardStats();
+        const stats = await getDashboardStats(req.user._id);
         return res.json({
           success: true,
           action: 'QUERY_UDHAAR',
@@ -159,7 +160,7 @@ export const executeVoiceAction = async (req, res) => {
       }
 
       case 'QUERY_LOW_STOCK': {
-        const stats = await getDashboardStats();
+        const stats = await getDashboardStats(req.user._id);
         const count = stats.lowStockCount;
         return res.json({
           success: true,
@@ -181,6 +182,6 @@ export const executeVoiceAction = async (req, res) => {
       spokenConfirmation,
     });
   } catch (error) {
-    return sendApiError(res, error, 400);
+    return sendApiError(res, error);
   }
 };

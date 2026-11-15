@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 
 const customerSchema = new mongoose.Schema(
   {
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     name: {
       type: String,
       required: true,
@@ -29,5 +30,7 @@ const customerSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+customerSchema.index({ ownerId: 1, isArchived: 1, updatedAt: -1 });
 
 export default mongoose.models.Customer || mongoose.model('Customer', customerSchema);

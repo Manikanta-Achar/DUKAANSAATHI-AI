@@ -58,7 +58,7 @@ export default function Inventory() {
           price: Number(formPrice) || 0,
           quantity: Number(formQty) || 0,
           unit: formUnit.trim() || 'packets',
-          lowStockThreshold: Number(formThreshold) || 5,
+          lowStockThreshold: formThreshold === '' ? 5 : Number(formThreshold),
         });
         if (res.data?.success) {
           showToast(`Updated "${formName}" successfully!`, 'success');
@@ -71,7 +71,7 @@ export default function Inventory() {
           price: Number(formPrice) || 0,
           quantity: Number(formQty) || 0,
           unit: formUnit.trim() || 'packets',
-          lowStockThreshold: Number(formThreshold) || 5,
+          lowStockThreshold: formThreshold === '' ? 5 : Number(formThreshold),
         });
         if (res.data?.success) {
           showToast(`Added "${formName}" to inventory!`, 'success');

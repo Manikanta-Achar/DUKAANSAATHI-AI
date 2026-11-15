@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useShop } from '../context/ShopContext.jsx';
 import api from '../api/api.js';
 import TransactionCard from '../components/TransactionCard.jsx';
@@ -14,6 +14,14 @@ export default function History() {
   const [selectedTxnToReverse, setSelectedTxnToReverse] = useState(null);
   const [reversalReason, setReversalReason] = useState('Entry corrected by shopkeeper');
   const [isReversing, setIsReversing] = useState(false);
+  const [page, setPage] = useState(1);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  useEffect(() => {
+    let active = true;
+    setHistoryLoading(true);
+    refreshTransactions({ search: searchTerm, type: filterType, limit: 50, page }).finally(() => { if (active) setHistoryLoading(false); });
+    return () => { active = false; };
+  }, [searchTerm, filterType, page, refreshTransactions]);
 
   const handleReverse = async () => {
     if (!selectedTxnToReverse) return;
@@ -76,7 +84,7 @@ export default function History() {
         </div>
 
         <div className="text-xs font-semibold text-slate-500 self-start sm:self-auto px-3 py-1 bg-white border border-slate-200 rounded-lg shadow-2xs">
-          Total Entries: <span className="text-slate-900 font-bold">{transactions.length}</span>
+          Page {page}: <span className="text-slate-900 font-bold">{transactions.length} entries</span>
         </div>
       </div>
 
@@ -87,7 +95,7 @@ export default function History() {
           <input
             type="text"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
             placeholder="Search by customer, product, or note (e.g. Ramesh, Milk)..."
             className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
           />
@@ -98,7 +106,7 @@ export default function History() {
           {filterTabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setFilterType(tab.id)}
+              onClick={() => { setFilterType(tab.id); setPage(1); }}
               className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition-all cursor-pointer ${
                 filterType === tab.id
                   ? 'bg-white text-slate-900 shadow-2xs font-bold'
@@ -113,7 +121,7 @@ export default function History() {
 
       {/* Transaction List */}
       <div className="space-y-2.5">
-        {filteredTransactions.length > 0 ? (
+        {historyLoading ? <div role="status" className="py-12 text-center text-slate-500">Loading transaction history...</div> : filteredTransactions.length > 0 ? (
           filteredTransactions.map((txn) => (
             <TransactionCard
               key={txn._id}
@@ -133,6 +141,11 @@ export default function History() {
       </div>
 
       {/* Reversal Confirmation Modal */}
+      <div className="flex items-center justify-end gap-3 text-sm">
+        <button disabled={page === 1 || historyLoading} onClick={() => setPage((value) => value - 1)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 disabled:opacity-40">Previous</button>
+        <span className="text-slate-500">Page {page}</span>
+        <button disabled={transactions.length < 50 || historyLoading} onClick={() => setPage((value) => value + 1)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 disabled:opacity-40">Next</button>
+      </div>
       <ConfirmationModal
         isOpen={!!selectedTxnToReverse}
         title="Reverse Transaction with Audit Trail"

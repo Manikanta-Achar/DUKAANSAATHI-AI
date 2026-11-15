@@ -77,6 +77,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
       };
 
       recognitionRef.current = recognition;
+      return () => { recognition.onend = null; recognition.onresult = null; recognition.onerror = null; recognition.abort(); };
     } catch (err) {
       console.warn('Speech recognition setup error:', err);
       setSpeechSupported(false);
@@ -197,6 +198,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
     try {
       const payload = {
         action,
+        confirmed: true,
         customerName: editCustomer || interpretedAction.customerName,
         amount,
         productName: editProduct || interpretedAction.productName,
@@ -280,6 +282,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
 
           {isModal && onClose && (
             <button
+              aria-label="Close assistant"
               onClick={onClose}
               className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
             >
@@ -297,6 +300,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
             <div className="absolute inset-0 rounded-full bg-emerald-400 animate-ping opacity-40"></div>
           )}
           <button
+            aria-label={isListening ? 'Stop listening' : 'Start voice command'}
             onClick={toggleListening}
             className={`relative flex items-center justify-center w-20 h-20 sm:w-24 sm:h-24 rounded-full shadow-lg transition-all duration-300 cursor-pointer ${
               isListening

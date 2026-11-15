@@ -3,7 +3,8 @@ import { useShop } from '../context/ShopContext.jsx';
 import { LayoutDashboard, Users, Boxes, Clock, Sparkles } from 'lucide-react';
 
 export default function Sidebar() {
-  const { dashboard } = useShop();
+  const { dashboard, customers, customersLoading } = useShop();
+  const activeCount = customers.filter((customer) => customer.isArchived !== true).length;
 
   const navItems = [
     {
@@ -16,7 +17,7 @@ export default function Sidebar() {
       to: '/udhaar',
       label: 'Udhaar Ledger',
       icon: Users,
-      badge: dashboard.totalCustomers ? `${dashboard.totalCustomers} cust` : null,
+      badge: customersLoading ? '...' : `${activeCount} cust`,
       badgeColor: 'bg-emerald-100 text-emerald-800',
     },
     {

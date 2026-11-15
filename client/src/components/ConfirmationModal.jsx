@@ -1,4 +1,5 @@
 import { AlertTriangle, X } from 'lucide-react';
+import { useRef, useState } from 'react';
 
 export default function ConfirmationModal({
   isOpen,
@@ -11,6 +12,15 @@ export default function ConfirmationModal({
   onCancel,
   children,
 }) {
+  const inFlight = useRef(false);
+  const [pending, setPending] = useState(false);
+  const confirm = async (event) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    try { await onConfirm(event); }
+    finally { inFlight.current = false; setPending(false); }
+  };
   if (!isOpen) return null;
 
   return (
@@ -26,6 +36,7 @@ export default function ConfirmationModal({
             <h3 className="font-bold text-slate-900 text-base">{title}</h3>
           </div>
           <button
+            disabled={pending}
             onClick={onCancel}
             className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
           >
@@ -40,20 +51,22 @@ export default function ConfirmationModal({
 
         <div className="flex items-center justify-end gap-2.5 p-4 bg-slate-50 border-t border-slate-100">
           <button
+            disabled={pending}
             onClick={onCancel}
             className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
           >
             {cancelLabel}
           </button>
           <button
-            onClick={onConfirm}
+            disabled={pending}
+            onClick={confirm}
             className={`px-4 py-2 text-xs sm:text-sm font-semibold text-white rounded-xl shadow-xs transition-colors cursor-pointer ${
               isDestructive
                 ? 'bg-rose-600 hover:bg-rose-700'
                 : 'bg-emerald-600 hover:bg-emerald-700'
             }`}
           >
-            {confirmLabel}
+            {pending ? 'Saving...' : confirmLabel}
           </button>
         </div>
       </div>

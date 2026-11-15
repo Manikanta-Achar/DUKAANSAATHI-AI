@@ -6,7 +6,7 @@ import { GoogleGenAI } from '@google/genai';
  * Guarantees instantaneous, bulletproof interpretation even without internet or API key.
  */
 function parseWithRuleEngine(text, preferredLang = 'hi') {
-  const t = text.trim();
+  const t = text.trim().replace(/[०-९]/g, (digit) => String(digit.charCodeAt(0) - 0x0966)).replace(/[೦-೯]/g, (digit) => String(digit.charCodeAt(0) - 0x0ce6));
   const lower = t.toLowerCase();
 
   // 1. Check for Query commands
@@ -16,6 +16,8 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
     lower.includes('total udhaar') ||
     lower.includes('how much udhaar') ||
     lower.includes('pending udhaar') ||
+    lower.includes('outstanding udhaar') ||
+    t.includes('बकाया उधार') ||
     t.includes('ಉದ್ರಿ ಎಷ್ಟು') ||
     t.includes('ಉದ್ರಿ ಬಾಕಿ') ||
     lower.includes('udri eshtu')
@@ -48,7 +50,7 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
 
   // 2. Numbers extraction
   // Handles ₹40, 40 rupaye, 40 rs, 40 ರೂಪಾಯಿ, etc.
-  const numMatches = t.match(/\d+(\.\d+)?/g);
+  const numMatches = t.match(/-?\d+(\.\d+)?/g);
   const primaryNumber = numMatches ? Number(numMatches[0]) : null;
   const validPrimaryNumber = Number.isFinite(primaryNumber) && primaryNumber > 0;
 
@@ -64,6 +66,7 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
     lower.includes('returned') ||
     lower.includes('deposit') ||
     lower.includes('bhara') ||
+    t.includes('वापस') ||
     t.includes('ಕೊಟ್ಟಿದ್ದಾನೆ') ||
     t.includes('ಕೊಟ್ಟಿದಾರೆ') ||
     lower.includes('kottiddane') ||
@@ -78,6 +81,7 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
       lower.includes('credit') ||
       lower.includes('khata') ||
       lower.includes('khaata') ||
+      t.includes('उधार') ||
       t.includes('ಉದ್ರಿ') ||
       lower.includes('udri'));
 
@@ -85,7 +89,7 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
     // Extract customer name
     let customerName = '';
     // Match patterns like: "Ramesh ko...", "Ramesh ne...", "Add 40 to Ramesh", "ರಮೇಶ್ ಗೆ...", "ರಮೇಶ್..."
-    const hinglishMatch = t.match(/([a-zA-Z\u0900-\u097F\u0C80-\u0CFF]+)\s+(ko|ne|ka|ki|ge|se)\b/i);
+    const hinglishMatch = t.match(/^(.+?)\s+(?:को|ने|ಗೆ)\s/) || t.match(/([a-zA-Z\u0900-\u097F\u0C80-\u0CFF]+)\s+(ko|ne|ka|ki|ge|se)\b/i);
     if (hinglishMatch) {
       customerName = hinglishMatch[1].trim();
     } else {
@@ -162,29 +166,29 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
   if (isStockAdd || isStockReduce) {
     // Extract known products
     const productKeywords = [
-      { key: 'milk', name: 'Amul Milk', unit: 'packets' },
-      { key: 'doodh', name: 'Amul Milk', unit: 'packets' },
-      { key: 'ಹಾಲು', name: 'Amul Milk', unit: 'packets' },
-      { key: 'haalu', name: 'Amul Milk', unit: 'packets' },
-      { key: 'sugar', name: 'Tata Sugar', unit: 'kg' },
-      { key: 'cheeni', name: 'Tata Sugar', unit: 'kg' },
-      { key: 'chini', name: 'Tata Sugar', unit: 'kg' },
-      { key: 'ಸಕ್ಕರೆ', name: 'Tata Sugar', unit: 'kg' },
-      { key: 'sakkare', name: 'Tata Sugar', unit: 'kg' },
-      { key: 'tea', name: 'Red Label Tea', unit: 'packets' },
-      { key: 'chai', name: 'Red Label Tea', unit: 'packets' },
-      { key: 'chaha', name: 'Red Label Tea', unit: 'packets' },
-      { key: 'tea patti', name: 'Red Label Tea', unit: 'packets' },
-      { key: 'oil', name: 'Fortune Mustard Oil', unit: 'litres' },
-      { key: 'tel', name: 'Fortune Mustard Oil', unit: 'litres' },
-      { key: 'ಎಣ್ಣೆ', name: 'Fortune Mustard Oil', unit: 'litres' },
-      { key: 'enne', name: 'Fortune Mustard Oil', unit: 'litres' },
-      { key: 'atta', name: 'Aashirvaad Atta', unit: 'kg' },
-      { key: 'aata', name: 'Aashirvaad Atta', unit: 'kg' },
-      { key: 'ಹಿಟ್ಟು', name: 'Aashirvaad Atta', unit: 'kg' },
-      { key: 'hittu', name: 'Aashirvaad Atta', unit: 'kg' },
-      { key: 'biscuit', name: 'Parle-G Biscuits', unit: 'packets' },
-      { key: 'parle', name: 'Parle-G Biscuits', unit: 'packets' },
+      { key: 'milk', name: 'Milk', unit: 'packets' },
+      { key: 'doodh', name: 'Milk', unit: 'packets' },
+      { key: 'ಹಾಲು', name: 'Milk', unit: 'packets' },
+      { key: 'haalu', name: 'Milk', unit: 'packets' },
+      { key: 'sugar', name: 'Sugar', unit: 'kg' },
+      { key: 'cheeni', name: 'Sugar', unit: 'kg' },
+      { key: 'chini', name: 'Sugar', unit: 'kg' },
+      { key: 'ಸಕ್ಕರೆ', name: 'Sugar', unit: 'kg' },
+      { key: 'sakkare', name: 'Sugar', unit: 'kg' },
+      { key: 'tea', name: 'Tea', unit: 'packets' },
+      { key: 'chai', name: 'Tea', unit: 'packets' },
+      { key: 'chaha', name: 'Tea', unit: 'packets' },
+      { key: 'tea patti', name: 'Tea', unit: 'packets' },
+      { key: 'oil', name: 'Oil', unit: 'litres' },
+      { key: 'tel', name: 'Oil', unit: 'litres' },
+      { key: 'ಎಣ್ಣೆ', name: 'Oil', unit: 'litres' },
+      { key: 'enne', name: 'Oil', unit: 'litres' },
+      { key: 'atta', name: 'Atta', unit: 'kg' },
+      { key: 'aata', name: 'Atta', unit: 'kg' },
+      { key: 'ಹಿಟ್ಟು', name: 'Atta', unit: 'kg' },
+      { key: 'hittu', name: 'Atta', unit: 'kg' },
+      { key: 'biscuit', name: 'Biscuits', unit: 'packets' },
+      { key: 'parle', name: 'Biscuits', unit: 'packets' },
     ];
 
     let foundProduct = null;
@@ -296,7 +300,7 @@ export async function parseShopCommand(text, language = 'hi') {
 
   if (apiKey && apiKey.trim() && apiKey !== 'your_api_key_here') {
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 10000 } });
       const prompt = `You are the AI assistant for an Indian Kirana/Chai shopkeeper ("DukaanSaathi AI").
 Interpret the shopkeeper's voice command in Hindi, Kannada, or English and extract structured transaction intent.
 
@@ -319,15 +323,16 @@ You MUST respond strictly with a valid JSON object without markdown formatting, 
 Rules:
 1. "Ramesh ko 40 rupaye udhaar do" -> action: "ADD_UDHAAR", customerName: "Ramesh", amount: 40
 2. "Ramesh ne 20 rupaye wapas diye" or "Ramesh ne pay kiye" -> action: "RECORD_REPAYMENT", customerName: "Ramesh", amount: 20
-3. "Milk ke 5 packet stock mein add karo" -> action: "ADD_STOCK", productName: "Amul Milk" (or Milk), quantity: 5, unit: "packets"
-4. "Reduce sugar stock by 2 packets" -> action: "REDUCE_STOCK", productName: "Tata Sugar" (or Sugar), quantity: 2, unit: "kg" or "packets"
+3. "Milk ke 5 packet stock mein add karo" -> action: "ADD_STOCK", productName: "Milk" (never invent a brand), quantity: 5, unit: "packets"
+4. "Reduce sugar stock by 2 packets" -> action: "REDUCE_STOCK", productName: "Sugar" (never invent a brand), quantity: 2, unit: "kg" or "packets"
 5. If customer name or amount is missing or ambiguous, action must be "UNKNOWN" and provide a helpful clarificationQuestion.
 6. Do NOT invent unknown customers or random numbers.`;
 
-      // Try gemini-2.5-flash or gemini-1.5-flash
+      const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model,
         contents: prompt,
+        config: { responseMimeType: 'application/json' },
       });
 
       const rawText = response.text || '';
@@ -339,12 +344,17 @@ Rules:
 
       return {
         ...validated,
-        engine: 'Google Gemini 2.5 AI',
+        engine: `Google Gemini (${model})`,
       };
     } catch (err) {
+      const reason = String(err.message || '').match(/"reason"\s*:\s*"([A-Z_]+)"/)?.[1] || null;
+      const keyProblem = /api.?key.*(?:not valid|expired|invalid)|API_KEY_INVALID|API_KEY_EXPIRED/i.test(String(err.message || ''));
       console.warn('Gemini interpretation failed; using the local parser.', {
         name: err.name,
         code: err.code || null,
+        status: err.status || null,
+        reason,
+        category: keyProblem || [401, 403].includes(err.status) ? 'credentials_or_access' : err.status === 429 ? 'quota_or_rate_limit' : err.status === 404 ? 'model_unavailable' : err.status >= 500 ? 'provider_unavailable' : 'network_or_invalid_response',
       });
       return parseWithRuleEngine(text, language);
     }

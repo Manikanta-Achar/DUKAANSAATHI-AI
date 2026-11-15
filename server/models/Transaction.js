@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 
 const transactionSchema = new mongoose.Schema(
   {
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Customer',
@@ -60,5 +61,8 @@ const transactionSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+transactionSchema.index({ ownerId: 1, createdAt: -1 });
+transactionSchema.index({ ownerId: 1, customerId: 1 });
 
 export default mongoose.models.Transaction || mongoose.model('Transaction', transactionSchema);
