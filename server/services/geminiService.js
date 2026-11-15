@@ -9,6 +9,21 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
   const t = text.trim().replace(/[०-९]/g, (digit) => String(digit.charCodeAt(0) - 0x0966)).replace(/[೦-೯]/g, (digit) => String(digit.charCodeAt(0) - 0x0ce6));
   const lower = t.toLowerCase();
 
+  // Standalone customer creation needs a name, never an invented credit amount.
+  const createMatch = t.match(/^(?:create|add|register)\s+(?:a\s+)?(?:new\s+)?customer\s+(?:(?:named|called)\s+)?(.+?)[.!?।]*$/i)
+    || t.match(/^(.+?)\s+(?:naam\s+(?:ka|ke)\s+)?(?:naya\s+)?(?:customer|grahak)\s+(?:banao|banaye|jodo)[.!?।]*$/i)
+    || t.match(/^(.+?)\s+(?:नाम\s+(?:का|के)\s+)?(?:नया\s+)?ग्राहक\s+(?:बनाओ|बनाएं|जोड़ो)[.!?।]*$/u)
+    || t.match(/^(.+?)\s+(?:ಹೆಸರಿನ\s+)?(?:ಹೊಸ\s+)?ಗ್ರಾಹಕ(?:ರನ್ನು)?\s+(?:ಸೇರಿಸಿ|ರಚಿಸಿ)[.!?।]*$/u);
+  if (createMatch) {
+    const customerName = createMatch[1].trim().replace(/[.!?।]+$/u, '').trim();
+    return {
+      action: customerName ? 'CREATE_CUSTOMER' : 'NEED_CLARIFICATION', customerName,
+      amount: 0, confidence: 0.95,
+      explanation: customerName ? `Create customer ${customerName} with ₹0 outstanding balance` : 'Please specify the customer name.',
+      engine: 'DukaanSaathi Voice Engine (Fallback)',
+    };
+  }
+
   // 1. Check for Query commands
   if (
     lower.includes('aaj kitna udhaar') ||
@@ -64,6 +79,7 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
     lower.includes('chuka') ||
     lower.includes('paid') ||
     lower.includes('returned') ||
+    lower.includes('repay') ||
     lower.includes('deposit') ||
     lower.includes('bhara') ||
     t.includes('वापस') ||
@@ -89,13 +105,17 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
     // Extract customer name
     let customerName = '';
     // Match patterns like: "Ramesh ko...", "Ramesh ne...", "Add 40 to Ramesh", "ರಮೇಶ್ ಗೆ...", "ರಮೇಶ್..."
-    const hinglishMatch = t.match(/^(.+?)\s+(?:को|ने|ಗೆ)\s/) || t.match(/([a-zA-Z\u0900-\u097F\u0C80-\u0CFF]+)\s+(ko|ne|ka|ki|ge|se)\b/i);
+    const hinglishMatch = t.match(/^(.+?)\s+(?:को|ने|ಗೆ)\s/) || t.match(/^(.+?)\s+(ko|ne|ka|ki|ge|se)\b/i);
     if (hinglishMatch) {
       customerName = hinglishMatch[1].trim();
     } else {
       // First word if not a command keyword
+      const englishMatch = t.match(/^(?:give|add|record)\s+(?:₹|rs\.?\s*)?\d+(?:\.\d+)?\s+(?:(?:rupees|credit|udhaar)\s+)*(?:to|for)\s+(.+?)[.!?]*$/i)
+        || t.match(/^(.+?)\s+(?:paid|repaid|returned|owes)\s+/i)
+        || t.match(/^(?:record\s+)?(?:repayment|repay)\s+(?:of\s+)?(?:₹|rs\.?\s*)?\d+(?:\.\d+)?\s+(?:rupees\s+)?from\s+(.+?)[.!?]*$/i);
+      const kannadaMatch = t.match(/^(.+?)(?:ಗೆ|ನಿಗೆ|ನು)\s+\d/u);
       const words = t.split(/\s+/).filter((w) => !/^(add|give|record|udhaar|udhar|rupaye|rs|₹|ne|ko)$/i.test(w));
-      if (words.length > 0) customerName = words[0];
+      customerName = englishMatch?.[1] || kannadaMatch?.[1] || words[0] || '';
     }
 
     // Capitalize clean name
@@ -257,8 +277,9 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
   };
 }
 
-function validateGeminiAction(action) {
+export function validateGeminiAction(action) {
   const allowedActions = new Set([
+    'CREATE_CUSTOMER',
     'ADD_UDHAAR',
     'RECORD_REPAYMENT',
     'ADD_STOCK',
@@ -268,18 +289,32 @@ function validateGeminiAction(action) {
     'UNKNOWN',
   ]);
   if (!action || typeof action !== 'object' || !allowedActions.has(action.action)) return null;
+  // AI output may describe an intent, never pick a database ID or authorize creation/restoration.
+  action = Object.fromEntries(Object.entries(action).filter(([key]) => [
+    'action', 'customerName', 'amount', 'productName', 'quantity', 'unit',
+    'confidence', 'explanation', 'spokenFeedback', 'clarificationQuestion',
+  ].includes(key)));
+  for (const field of ['explanation', 'spokenFeedback', 'clarificationQuestion', 'unit']) {
+    if (typeof action[field] !== 'string') delete action[field];
+    else action[field] = action[field].slice(0, 500);
+  }
+
+  if (action.action === 'CREATE_CUSTOMER') {
+    if (typeof action.customerName !== 'string' || !action.customerName.trim() || action.customerName.length > 120) return null;
+    return { ...action, customerName: action.customerName.trim(), amount: 0 };
+  }
 
   if (['ADD_UDHAAR', 'RECORD_REPAYMENT'].includes(action.action)) {
-    const amount = Number(action.amount);
-    if (typeof action.customerName !== 'string' || !action.customerName.trim() || !Number.isFinite(amount) || amount <= 0) {
+    const amount = action.amount;
+    if (typeof action.customerName !== 'string' || !action.customerName.trim() || action.customerName.length > 120 || typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0 || amount > 1e10 || Math.abs(amount * 100 - Math.round(amount * 100)) > 0.0001) {
       return null;
     }
     return { ...action, customerName: action.customerName.trim(), amount };
   }
 
   if (['ADD_STOCK', 'REDUCE_STOCK'].includes(action.action)) {
-    const quantity = Number(action.quantity);
-    if (typeof action.productName !== 'string' || !action.productName.trim() || !Number.isFinite(quantity) || quantity <= 0) {
+    const quantity = action.quantity;
+    if (typeof action.productName !== 'string' || !action.productName.trim() || typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity <= 0) {
       return null;
     }
     return { ...action, productName: action.productName.trim(), quantity };
@@ -308,7 +343,7 @@ User voice transcript: "${text}"
 
 You MUST respond strictly with a valid JSON object without markdown formatting, following this exact schema:
 {
-  "action": "ADD_UDHAAR" | "RECORD_REPAYMENT" | "ADD_STOCK" | "REDUCE_STOCK" | "QUERY_UDHAAR" | "QUERY_LOW_STOCK" | "UNKNOWN",
+  "action": "CREATE_CUSTOMER" | "ADD_UDHAAR" | "RECORD_REPAYMENT" | "ADD_STOCK" | "REDUCE_STOCK" | "QUERY_UDHAAR" | "QUERY_LOW_STOCK" | "UNKNOWN",
   "customerName": string or null,
   "amount": number or null,
   "productName": string or null,
@@ -326,7 +361,10 @@ Rules:
 3. "Milk ke 5 packet stock mein add karo" -> action: "ADD_STOCK", productName: "Milk" (never invent a brand), quantity: 5, unit: "packets"
 4. "Reduce sugar stock by 2 packets" -> action: "REDUCE_STOCK", productName: "Sugar" (never invent a brand), quantity: 2, unit: "kg" or "packets"
 5. If customer name or amount is missing or ambiguous, action must be "UNKNOWN" and provide a helpful clarificationQuestion.
-6. Do NOT invent unknown customers or random numbers.`;
+6. Extract only names and numbers actually spoken. Do not invent a name, translate a person's name, or claim they exist in the database; the backend checks ownership and existence.
+7. "Create a new customer named Mahesh" -> action: "CREATE_CUSTOMER", customerName: "Mahesh", amount: 0. Hindi "महेश नाम का नया ग्राहक बनाओ" and Kannada "ಮಹೇಶ್ ಹೆಸರಿನ ಹೊಸ ಗ್ರಾಹಕ ಸೇರಿಸಿ" mean the same standalone creation action.
+8. "ಮಹೇಶ್ ಗೆ 100 ರೂಪಾಯಿ ಉದ್ರಿ ಕೊಡು" -> ADD_UDHAAR, customerName: "ಮಹೇಶ್", amount: 100. "ಮಹೇಶ್ 40 ರೂಪಾಯಿ ಕೊಟ್ಟಿದ್ದಾನೆ" -> RECORD_REPAYMENT.
+9. ADD_UDHAAR may refer to a customer not created yet: still extract ADD_UDHAAR and the supplied name/amount. Never turn a repayment into a create command. Preserve full multiword names.`;
 
       const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
       const response = await ai.models.generateContent({

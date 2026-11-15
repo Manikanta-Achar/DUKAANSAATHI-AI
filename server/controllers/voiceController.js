@@ -1,59 +1,35 @@
 import { parseShopCommand } from '../services/geminiService.js';
 import {
-  addUdhaar,
-  recordRepayment,
   adjustStock,
   getDashboardStats,
-  findCustomerByName,
   findProductByName,
 } from '../services/dataService.js';
+import { customerActions, prepareCustomerAction, executeCustomerAction } from '../services/customerAssistantService.js';
 import { sendApiError } from '../utils/apiErrors.js';
 
 export const processVoice = async (req, res) => {
   try {
     const { transcript, language } = req.body;
     if (typeof transcript !== 'string' || !transcript.trim() || transcript.length > 1000) {
-      return res.status(400).json({ success: false, message: 'Voice transcript is required' });
+      return res.status(400).json({ success: false, message: 'Voice transcript is required (maximum 1000 characters).' });
     }
-
     const proposedAction = await parseShopCommand(transcript, language);
+    const customerPreview = customerActions.has(proposedAction.action)
+      ? await prepareCustomerAction(req.user._id, proposedAction) : {};
+    const product = proposedAction.productName ? await findProductByName(req.user._id, proposedAction.productName) : null;
+    return res.json({ success: true, data: {
+      ...proposedAction, customerContext: null, ...customerPreview,
+      productContext: product ? { id: product._id, name: product.name, currentStock: product.quantity, unit: product.unit } : null,
+    } });
+  } catch (error) { return sendApiError(res, error); }
+};
 
-    // Contextual lookup: if customer or product named, enrich with current system state
-    let customerContext = null;
-    let productContext = null;
-
-    if (proposedAction.customerName) {
-      customerContext = await findCustomerByName(req.user._id, proposedAction.customerName);
-      if (customerContext?.isArchived) customerContext = null;
-    }
-    if (proposedAction.productName) {
-      productContext = await findProductByName(req.user._id, proposedAction.productName);
-    }
-
-    return res.json({
-      success: true,
-      data: {
-        ...proposedAction,
-        customerContext: customerContext
-          ? {
-              id: customerContext._id,
-              name: customerContext.name,
-              currentUdhaar: customerContext.totalUdhaar,
-            }
-          : null,
-        productContext: productContext
-          ? {
-              id: productContext._id,
-              name: productContext.name,
-              currentStock: productContext.quantity,
-              unit: productContext.unit,
-            }
-          : null,
-      },
-    });
-  } catch (error) {
-    return sendApiError(res, error, 500);
-  }
+// Re-check edited fields and an explicit customer selection without another AI call.
+export const previewCustomerAction = async (req, res) => {
+  try {
+    const { action, customerName, customerId, amount } = req.body;
+    return res.json({ success: true, data: await prepareCustomerAction(req.user._id, { action, customerName, customerId, amount }) });
+  } catch (error) { return sendApiError(res, error); }
 };
 
 export const executeVoiceAction = async (req, res) => {
@@ -69,43 +45,20 @@ export const executeVoiceAction = async (req, res) => {
     let spokenConfirmation = '';
 
     switch (action) {
-      case 'ADD_UDHAAR': {
-        const numericAmount = Number(amount);
-        const cleanCustomerName = typeof customerName === 'string' ? customerName.trim() : '';
-        if (!cleanCustomerName || !Number.isFinite(numericAmount) || numericAmount <= 0) {
-          return res.status(400).json({ success: false, message: 'Valid customer name and amount are required' });
-        }
-        const customer = await findCustomerByName(req.user._id, cleanCustomerName);
-        if (!customer || customer.isArchived) {
-          return res.status(404).json({ success: false, message: 'Active customer not found' });
-        }
-        result = await addUdhaar(req.user._id, { requestKey: req.get('Idempotency-Key'),
-          customerId: customer._id,
-          customerName: customer.name,
-          amount: numericAmount,
-          description: description || `Voice credit: ₹${amount}`,
+      case 'ADD_UDHAAR':
+      case 'RECORD_REPAYMENT':
+      case 'CREATE_CUSTOMER': {
+        result = await executeCustomerAction(req.user._id, {
+          action, customerName, amount, description,
+          customerId: req.body.customerId,
+          createCustomer: req.body.createCustomer,
+          restoreCustomer: req.body.restoreCustomer,
+          requestKey: req.get('Idempotency-Key'),
         });
-        spokenConfirmation = `${result.customer.name} के खाते में ₹${amount} उधार जोड़ दिया गया है। नया बकाया ₹${result.customer.totalUdhaar} है।`;
-        break;
-      }
-
-      case 'RECORD_REPAYMENT': {
-        const numericAmount = Number(amount);
-        const cleanCustomerName = typeof customerName === 'string' ? customerName.trim() : '';
-        if (!cleanCustomerName || !Number.isFinite(numericAmount) || numericAmount <= 0) {
-          return res.status(400).json({ success: false, message: 'Valid customer name and amount are required' });
-        }
-        const customer = await findCustomerByName(req.user._id, cleanCustomerName);
-        if (!customer || customer.isArchived) {
-          return res.status(404).json({ success: false, message: 'Active customer not found' });
-        }
-        result = await recordRepayment(req.user._id, { requestKey: req.get('Idempotency-Key'),
-          customerId: customer._id,
-          customerName: customer.name,
-          amount: numericAmount,
-          description: description || `Voice repayment: ₹${amount}`,
-        });
-        spokenConfirmation = `${result.customer.name} से ₹${amount} की वापसी दर्ज हो गई। बाकी उधार ₹${result.customer.totalUdhaar} है।`;
+        const customer = result.customer;
+        spokenConfirmation = action === 'CREATE_CUSTOMER'
+          ? customer.name + (result.restoredCustomer ? ' restored.' : result.createdCustomer ? ' created.' : ' already exists.') + ' Outstanding balance: ₹' + customer.totalUdhaar + '.'
+          : (action === 'ADD_UDHAAR' ? 'Added ₹' : 'Repaid ₹') + amount + ' for ' + customer.name + '. Outstanding balance: ₹' + customer.totalUdhaar + '.';
         break;
       }
 

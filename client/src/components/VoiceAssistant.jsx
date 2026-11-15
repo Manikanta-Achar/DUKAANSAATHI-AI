@@ -32,9 +32,44 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
   const [editAmount, setEditAmount] = useState('');
   const [editProduct, setEditProduct] = useState('');
   const [editQuantity, setEditQuantity] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [previewError, setPreviewError] = useState('');
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const recognitionRef = useRef(null);
   const executionInFlight = useRef(false);
+  const processingInFlight = useRef(false);
+  const closeTimeout = useRef(null);
+  useEffect(() => () => clearTimeout(closeTimeout.current), []);
+  const isCustomerAction = ['ADD_UDHAAR', 'RECORD_REPAYMENT', 'CREATE_CUSTOMER'].includes(interpretedAction?.action);
+  const customerPreviewDirty = isCustomerAction && (
+    editCustomer.trim() !== interpretedAction.customerName ||
+    selectedCustomerId !== (interpretedAction.customerContext?.id || '') ||
+    (interpretedAction.action !== 'CREATE_CUSTOMER' && Number(editAmount) !== interpretedAction.amount)
+  );
+
+  useEffect(() => {
+    if (!customerPreviewDirty || !editCustomer.trim() || (interpretedAction.action !== 'CREATE_CUSTOMER' && !(Number(editAmount) > 0))) return;
+    const controller = new AbortController();
+    setIsPreviewLoading(true);
+    setPreviewError('');
+    const timer = setTimeout(async () => {
+      try {
+        const response = await api.post('/api/voice/preview', {
+          action: interpretedAction.action, customerName: editCustomer,
+          customerId: selectedCustomerId || undefined, amount: Number(editAmount),
+        }, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        const data = response.data.data;
+        setInterpretedAction((previous) => ({ ...previous, ...data }));
+        setEditCustomer(data.customerName);
+        setSelectedCustomerId(data.customerContext?.id || '');
+      } catch (error) {
+        if (!controller.signal.aborted) setPreviewError(error.response?.data?.message || 'Could not check this customer. Interpret the command again.');
+      } finally { if (!controller.signal.aborted) setIsPreviewLoading(false); }
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [customerPreviewDirty, editCustomer, editAmount, selectedCustomerId, interpretedAction]);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -127,13 +162,18 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
 
   // Submit voice transcript or typed text to Backend for AI Interpretation
   const handleProcessCommand = async (textToProcess) => {
+    if (processingInFlight.current || executionInFlight.current) return;
+    clearTimeout(closeTimeout.current);
     const query = (textToProcess || inputText || transcript).trim();
     if (!query) {
       showToast('Please speak or type a shop command first', 'error');
       return;
     }
 
+    processingInFlight.current = true;
     setIsProcessing(true);
+    setPreviewError('');
+    setIsPreviewLoading(false);
     setInterpretedAction(null);
 
     try {
@@ -148,19 +188,21 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
 
         // Pre-fill editable confirmation fields
         setEditCustomer(actionData.customerName || '');
+        setSelectedCustomerId(actionData.customerContext?.id || '');
         setEditAmount(actionData.amount ? String(actionData.amount) : '');
         setEditProduct(actionData.productName || '');
         setEditQuantity(actionData.quantity ? String(actionData.quantity) : '');
 
         // Speak guidance or question if clarification needed
-        if (actionData.spokenFeedback) {
-          speakText(actionData.spokenFeedback);
+        if (actionData.confirmationMessage || actionData.spokenFeedback) {
+          speakText(actionData.confirmationMessage || actionData.spokenFeedback);
         }
       }
     } catch (err) {
       const errMsg = err.response?.data?.message || err.message || 'Failed to interpret command';
       showToast(errMsg, 'error');
     } finally {
+      processingInFlight.current = false;
       setIsProcessing(false);
     }
   };
@@ -168,10 +210,11 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
   // Execute Confirmed AI Action on Database
   const handleConfirmAndExecute = async () => {
     if (!interpretedAction || executionInFlight.current) return;
+    if (isCustomerAction && (customerPreviewDirty || isPreviewLoading || previewError || !interpretedAction.canConfirm)) return;
 
     const action = interpretedAction.action;
-    const amount = Number(editAmount || interpretedAction.amount);
-    const quantity = Number(editQuantity || interpretedAction.quantity);
+    const amount = Number(editAmount);
+    const quantity = Number(editQuantity);
     if (
       ['ADD_UDHAAR', 'RECORD_REPAYMENT'].includes(action) &&
       (!editCustomer.trim() || !Number.isFinite(amount) || amount <= 0)
@@ -187,7 +230,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
       return;
     }
     if (
-      !['ADD_UDHAAR', 'RECORD_REPAYMENT', 'ADD_STOCK', 'REDUCE_STOCK', 'QUERY_UDHAAR', 'QUERY_LOW_STOCK'].includes(action)
+      !['CREATE_CUSTOMER', 'ADD_UDHAAR', 'RECORD_REPAYMENT', 'ADD_STOCK', 'REDUCE_STOCK', 'QUERY_UDHAAR', 'QUERY_LOW_STOCK'].includes(action)
     ) {
       showToast('This command needs clarification before it can be saved.', 'error');
       return;
@@ -199,6 +242,9 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
       const payload = {
         action,
         confirmed: true,
+        customerId: isCustomerAction ? selectedCustomerId || undefined : undefined,
+        createCustomer: isCustomerAction && interpretedAction.customerStatus === 'missing',
+        restoreCustomer: isCustomerAction && interpretedAction.customerStatus === 'archived',
         customerName: editCustomer || interpretedAction.customerName,
         amount,
         productName: editProduct || interpretedAction.productName,
@@ -223,12 +269,22 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
         await refreshAll();
 
         if (isModal && onClose) {
-          setTimeout(onClose, 1200);
+          closeTimeout.current = setTimeout(onClose, 1200);
         }
       }
     } catch (err) {
       const errMsg = err.response?.data?.message || err.message || 'Execution failed';
       showToast(errMsg, 'error');
+      if (isCustomerAction && err.response?.status === 409) {
+        // Do not execute a changed create/restore/selection plan without another confirmation.
+        try {
+          const response = await api.post('/api/voice/preview', { action, customerName: editCustomer, customerId: selectedCustomerId || undefined, amount });
+          const data = response.data.data;
+          setInterpretedAction((previous) => ({ ...previous, ...data }));
+          setEditCustomer(data.customerName);
+          setSelectedCustomerId(data.customerContext?.id || '');
+        } catch { setPreviewError('The customer changed. Interpret the command again before saving.'); }
+      }
     } finally {
       executionInFlight.current = false;
       setIsExecuting(false);
@@ -348,6 +404,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
       <div className="mt-2 flex items-center gap-2">
         <input
           type="text"
+          aria-label="Shop command"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleProcessCommand(inputText)}
@@ -356,7 +413,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
         />
         <button
           onClick={() => handleProcessCommand(inputText)}
-          disabled={isProcessing || !inputText.trim()}
+          disabled={isProcessing || isExecuting || !inputText.trim()}
           className="flex items-center gap-1.5 px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-sm font-semibold shadow-xs transition-all cursor-pointer"
         >
           {isProcessing ? (
@@ -378,6 +435,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
           {promptChips.map((chip, idx) => (
             <button
               key={idx}
+              disabled={isProcessing || isExecuting}
               onClick={() => {
                 setInputText(chip.label);
                 setSpeechLang(chip.lang);
@@ -393,7 +451,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
 
       {/* INTERPRETED ACTION CONFIRMATION STEP */}
       {interpretedAction && (
-        <div className="mt-5 p-4 sm:p-5 rounded-2xl bg-emerald-50/70 border border-emerald-200 animate-in fade-in slide-in-from-top-2 duration-200">
+        <div role="dialog" aria-label="Confirm shop action" className="mt-5 p-4 sm:p-5 rounded-2xl bg-emerald-50/70 border border-emerald-200 animate-in fade-in slide-in-from-top-2 duration-200">
           <div className="flex items-center justify-between pb-3 border-b border-emerald-200/60">
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-pulse"></span>
@@ -409,8 +467,22 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
           {/* Action Summary & Explanation */}
           <div className="mt-3 space-y-2">
             <p className="text-sm font-medium text-slate-800">
-              {interpretedAction.explanation}
+              {isPreviewLoading || customerPreviewDirty ? 'Checking customer details...' : interpretedAction.confirmationMessage || interpretedAction.explanation}
             </p>
+            {previewError && <p role="alert" className="text-sm text-rose-700">{previewError}</p>}
+            {isCustomerAction && interpretedAction.customerCandidates?.length > 0 && (
+              <fieldset className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <legend className="text-xs font-semibold text-amber-900">Select the correct customer</legend>
+                {interpretedAction.customerCandidates.map((customer) => (
+                  <label key={customer.id} className="flex items-center gap-2 text-sm text-slate-700">
+                    <input type="radio" name="assistant-customer" value={customer.id} checked={selectedCustomerId === customer.id} disabled={isExecuting}
+                      onChange={() => setSelectedCustomerId(customer.id)} />
+                    {customer.name} · {customer.phone || 'No phone'} · {customer.isArchived ? 'Archived' : 'Active'} · ₹{customer.currentUdhaar} · {customer.id.slice(-6)}
+                  </label>
+                ))}
+                {interpretedAction.hasMoreMatches && <p className="text-xs text-amber-900">More matches exist. Enter the full name to narrow the list.</p>}
+              </fieldset>
+            )}
 
             {interpretedAction.clarificationQuestion && (
               <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs">
@@ -426,6 +498,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3 pt-3 border-t border-emerald-200/60">
                   {/* Customer field if relevant */}
                   {(interpretedAction.action === 'ADD_UDHAAR' ||
+                    interpretedAction.action === 'CREATE_CUSTOMER' ||
                     interpretedAction.action === 'RECORD_REPAYMENT') && (
                     <>
                       <div>
@@ -434,22 +507,26 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
                         </label>
                         <input
                           type="text"
+                          aria-label="Customer name"
+                          disabled={isExecuting}
                           value={editCustomer}
-                          onChange={(e) => setEditCustomer(e.target.value)}
+                          onChange={(e) => { setEditCustomer(e.target.value); setSelectedCustomerId(''); setPreviewError(''); }}
                           className="w-full px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600"
                         />
                       </div>
-                      <div>
+                      {interpretedAction.action !== 'CREATE_CUSTOMER' && <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">
                           Amount (राशि ₹)
                         </label>
                         <input
                           type="number"
+                          aria-label="Udhaar or repayment amount"
+                          disabled={isExecuting}
                           value={editAmount}
                           onChange={(e) => setEditAmount(e.target.value)}
                           className="w-full px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-600"
                         />
-                      </div>
+                      </div>}
                     </>
                   )}
 
@@ -488,6 +565,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
           {/* Confirmation Action Buttons */}
           <div className="mt-4 pt-3 border-t border-emerald-200/60 flex items-center justify-end gap-2.5">
             <button
+              disabled={isExecuting}
               onClick={() => setInterpretedAction(null)}
               className="flex items-center gap-1 px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 text-xs sm:text-sm font-semibold rounded-xl border border-slate-200 transition-colors cursor-pointer"
             >
@@ -498,7 +576,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
             {!['UNKNOWN', 'NEED_CLARIFICATION'].includes(interpretedAction.action) && (
               <button
                 onClick={handleConfirmAndExecute}
-                disabled={isExecuting}
+                disabled={isExecuting || (isCustomerAction && (customerPreviewDirty || isPreviewLoading || Boolean(previewError) || !interpretedAction.canConfirm))}
                 className="flex items-center gap-1.5 px-5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white text-xs sm:text-sm font-semibold rounded-xl shadow-xs transition-colors cursor-pointer"
               >
                 {isExecuting ? (

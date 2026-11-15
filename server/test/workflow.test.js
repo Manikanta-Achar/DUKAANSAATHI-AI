@@ -208,7 +208,7 @@ test('authenticated shop workflows against an isolated MongoDB replica set', { t
         ['/api/udhaar/credit', 'POST', { customerId, amount: 1 }], ['/api/udhaar/repay', 'POST', { customerId, amount: 1 }],
         [`/api/inventory/${productId}`, 'GET'], [`/api/inventory/${productId}`, 'PUT', { quantity: 999 }], [`/api/inventory/${productId}`, 'DELETE'],
         ['/api/inventory/adjust', 'POST', { productId, quantityDelta: 1 }], [`/api/transactions/${creditId}/reverse`, 'POST'],
-        ['/api/voice/execute', 'POST', { action: 'ADD_UDHAAR', customerName: 'Mahesh', amount: 1, confirmed: true }],
+        ['/api/voice/execute', 'POST', { action: 'ADD_UDHAAR', customerId, customerName: 'Mahesh', amount: 1, confirmed: true }],
       ];
       for (const [path, method, body] of calls) await request(path, { method, body, jar: other, expected: 404 });
       assert.equal((await request('/api/voice/process', { method: 'POST', jar: other, body: { transcript: 'Mahesh ko 10 rupaye udhaar do' } })).data.customerContext, null);

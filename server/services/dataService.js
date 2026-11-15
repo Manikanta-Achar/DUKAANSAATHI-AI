@@ -7,6 +7,7 @@ import Operation from '../models/Operation.js';
 import { connectDB } from '../config/db.js';
 import { fail, text, number, objectId, escapeRegex } from '../utils/validation.js';
 import { getInitialSeedData } from './seedData.js';
+import { cleanCustomerName, customerNameKey, exactCustomerName } from '../utils/customerNames.js';
 
 const scope = (ownerId) => ({ ownerId: objectId(ownerId, 'Owner') });
 const byId = (ownerId, id) => ({ ...scope(ownerId), _id: objectId(id) });
@@ -22,7 +23,7 @@ async function atomic(work) {
 }
 
 // Store the response in the SAME transaction as the ledger mutation. No partial success.
-async function financialWrite(ownerId, key, input, work) {
+export async function financialWrite(ownerId, key, input, work) {
   text(key, 'Idempotency-Key', 128);
   await connectDB();
   await Operation.init();
@@ -75,26 +76,29 @@ export async function getCustomerById(ownerId, id) {
 
 export async function findCustomerByName(ownerId, name, session = null) {
   await connectDB();
-  const matches = await Customer.find({ ...scope(ownerId), name: nameQuery(name) }).limit(2).session(session);
+  const matches = await Customer.find({ ...scope(ownerId), name: exactCustomerName(name) }).limit(2).session(session);
   if (matches.length > 1) fail('Multiple customers match. Select the customer in the ledger.', 409);
   return matches[0] || null;
 }
 
 export async function createCustomer(ownerId, { name, phone = '' }) {
   await connectDB();
-  const cleanName = text(name, 'Customer name');
+  await Customer.init();
+  const cleanName = cleanCustomerName(name);
   const cleanPhone = text(phone, 'Phone', 30, true);
-  if (await Customer.exists({ ...scope(ownerId), name: nameQuery(cleanName) })) fail('A customer with this name already exists. Restore them from Archived if needed.', 409);
+  if (await Customer.exists({ ...scope(ownerId), name: exactCustomerName(cleanName) })) fail('A customer with this name already exists. Restore them from Archived if needed.', 409);
   return Customer.create({ ...scope(ownerId), name: cleanName, phone: cleanPhone });
 }
 
 export async function updateCustomer(ownerId, id, { name, phone = '' }) {
-  const cleanName = text(name, 'Customer name');
+  await connectDB();
+  await Customer.init();
+  const cleanName = cleanCustomerName(name);
   const cleanPhone = text(phone, 'Phone', 30, true);
   return atomic(async (session) => {
-    const duplicate = await Customer.exists({ ...scope(ownerId), _id: { $ne: objectId(id) }, name: nameQuery(cleanName) }).session(session);
+    const duplicate = await Customer.exists({ ...scope(ownerId), _id: { $ne: objectId(id) }, name: exactCustomerName(cleanName) }).session(session);
     if (duplicate) fail('A customer with this name already exists.', 409);
-    const customer = required(await Customer.findOneAndUpdate(byId(ownerId, id), { $set: { name: cleanName, phone: cleanPhone } }, { session, new: true, runValidators: true }), 'Customer');
+    const customer = required(await Customer.findOneAndUpdate(byId(ownerId, id), { $set: { name: cleanName, normalizedName: customerNameKey(cleanName), phone: cleanPhone } }, { session, new: true, runValidators: true }), 'Customer');
     await Transaction.updateMany({ ...scope(ownerId), customerId: customer._id }, { $set: { customerName: cleanName } }, { session });
     return customer;
   });
