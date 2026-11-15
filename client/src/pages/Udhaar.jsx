@@ -25,8 +25,14 @@ import {
 } from 'lucide-react';
 
 export default function Udhaar() {
-  const { customers, refreshCustomers, refreshDashboard, refreshTransactions, showToast } =
-    useShop();
+  const {
+    customers,
+    customersLoading,
+    refreshCustomers,
+    refreshDashboard,
+    refreshTransactions,
+    showToast,
+  } = useShop();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('active'); // 'active' or 'archived'
@@ -361,7 +367,13 @@ export default function Udhaar() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
-              {customers.length > 0 ? (
+              {customersLoading ? (
+                <tr>
+                  <td colSpan="5" className="py-12 text-center text-slate-400">
+                    Loading customers...
+                  </td>
+                </tr>
+              ) : customers.length > 0 ? (
                 customers.map((cust) => {
                   const balance = Number(cust.totalUdhaar) || 0;
                   const hasUdhaar = balance > 0;

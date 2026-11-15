@@ -8,15 +8,29 @@ import dashboardRoutes from './routes/dashboardRoutes.js';
 import voiceRoutes from './routes/voiceRoutes.js';
 import transactionRoutes from './routes/transactionRoutes.js';
 import { seedDatabase } from './services/dataService.js';
+import { getUdhaar } from './controllers/udhaarController.js';
+import { sendApiError } from './utils/apiErrors.js';
 
 dotenv.config();
 
 const app = express();
+const configuredFrontendOrigins = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+const allowedOrigins = new Set(['http://localhost:5173', ...configuredFrontendOrigins]);
+
+app.set('etag', false);
 app.use(
   cors({
-    origin: true,
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+      const error = new Error('Origin is not allowed by CORS.');
+      error.statusCode = 403;
+      return callback(error);
+    },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
@@ -32,32 +46,21 @@ app.get('/', (_req, res) =>
   })
 );
 
-// Reuse a connection attempt per warm instance, but retry after failures.
-let dbPromise = null;
-const initDb = () => {
-  if (!dbPromise) {
-    dbPromise = connectDB().catch((err) => {
-      dbPromise = null;
-      throw err;
-    });
-  }
-  return dbPromise;
-};
-
+// API responses are always fresh; API writes and reads must use the same persistent source.
 app.use('/api', async (_req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
   try {
-    await initDb();
+    await connectDB();
     next();
   } catch (error) {
-    console.error('Database unavailable for API request:', error.message);
-    res.status(503).json({
-      success: false,
-      message: 'Database unavailable. Please try again later.',
-    });
+    return sendApiError(res, error, 503);
   }
 });
 
 // Core API Routes
+app.get('/api/customers', getUdhaar);
 app.use('/api/udhaar', udhaarRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/dashboard', dashboardRoutes);
@@ -66,19 +69,21 @@ app.use('/api/transactions', transactionRoutes);
 
 // Explicit Seed Endpoint for Demo
 app.post('/api/seed', async (req, res) => {
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    return res.status(403).json({ success: false, message: 'Demo seeding is disabled on hosted deployments.' });
+  }
   try {
     const { force = false } = req.body || {};
     const result = await seedDatabase(force);
     return res.json({ success: true, ...result });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return sendApiError(res, error, 500);
   }
 });
 
 // Centralized error handler
 app.use((err, _req, res, _next) => {
-  console.error('Unhandled server error:', err);
-  res.status(500).json({ success: false, message: err.message || 'Internal server error' });
+  return sendApiError(res, err, 500);
 });
 
 const port = process.env.PORT || 5000;

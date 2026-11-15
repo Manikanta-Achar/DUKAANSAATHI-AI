@@ -10,11 +10,16 @@ import Inventory from './pages/Inventory.jsx';
 import History from './pages/History.jsx';
 
 function AppContent() {
-  const { isVoiceModalOpen, setIsVoiceModalOpen } = useShop();
+  const { isVoiceModalOpen, setIsVoiceModalOpen, error } = useShop();
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
       <Navbar />
+      {error && (
+        <div role="alert" className="bg-rose-50 px-4 py-2 text-center text-sm text-rose-800">
+          {error}
+        </div>
+      )}
 
       <div className="flex flex-col md:flex-row flex-1">
         <Sidebar />

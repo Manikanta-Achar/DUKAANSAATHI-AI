@@ -50,18 +50,19 @@ export default function Navbar() {
           </select>
         </div>
 
-        {/* Demo Seed Data Button */}
-        <button
-          onClick={() => seedDemo(true)}
-          disabled={loading}
-          title="Reset sample Kirana shop data for demo"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-700/80 hover:bg-emerald-700 border border-emerald-600 rounded-lg transition-colors cursor-pointer"
-        >
-          <RefreshCw
-            className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`}
-          />
-          <span className="hidden sm:inline">Reset Demo</span>
-        </button>
+        {import.meta.env.DEV && (
+          <button
+            onClick={() => seedDemo(true)}
+            disabled={loading}
+            title="Reset sample Kirana shop data for demo"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-emerald-700/80 hover:bg-emerald-700 border border-emerald-600 rounded-lg transition-colors cursor-pointer"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`}
+            />
+            <span className="hidden sm:inline">Reset Demo</span>
+          </button>
+        )}
 
         {/* Floating Voice Assistant Trigger */}
         <button

@@ -49,7 +49,8 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
   // 2. Numbers extraction
   // Handles ₹40, 40 rupaye, 40 rs, 40 ರೂಪಾಯಿ, etc.
   const numMatches = t.match(/\d+(\.\d+)?/g);
-  const primaryNumber = numMatches ? parseFloat(numMatches[0]) : null;
+  const primaryNumber = numMatches ? Number(numMatches[0]) : null;
+  const validPrimaryNumber = Number.isFinite(primaryNumber) && primaryNumber > 0;
 
   // 3. Detect Udhaar Repayment:
   // "Ramesh ne 20 rupaye wapas diye", "Ramesh ne 30 rupaye pay kiye", "Ramesh paid 40", "ರಮೇಶ್ 20 ರೂಪಾಯಿ ಕೊಟ್ಟಿದ್ದಾನೆ"
@@ -98,7 +99,7 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
       customerName = customerName.charAt(0).toUpperCase() + customerName.slice(1);
     }
 
-    if (!customerName || !primaryNumber) {
+    if (!customerName || !validPrimaryNumber) {
       return {
         action: 'NEED_CLARIFICATION',
         customerName: customerName || null,
@@ -204,7 +205,7 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
       }
     }
 
-    if (!productName || !primaryNumber) {
+    if (!productName || !validPrimaryNumber) {
       return {
         action: 'NEED_CLARIFICATION',
         productName: productName || null,
@@ -250,6 +251,37 @@ function parseWithRuleEngine(text, preferredLang = 'hi') {
     spokenFeedback: 'आदेश समझ नहीं आया। कृपया दोबारा बोलें।',
     engine: 'DukaanSaathi Voice Engine (Fallback)',
   };
+}
+
+function validateGeminiAction(action) {
+  const allowedActions = new Set([
+    'ADD_UDHAAR',
+    'RECORD_REPAYMENT',
+    'ADD_STOCK',
+    'REDUCE_STOCK',
+    'QUERY_UDHAAR',
+    'QUERY_LOW_STOCK',
+    'UNKNOWN',
+  ]);
+  if (!action || typeof action !== 'object' || !allowedActions.has(action.action)) return null;
+
+  if (['ADD_UDHAAR', 'RECORD_REPAYMENT'].includes(action.action)) {
+    const amount = Number(action.amount);
+    if (typeof action.customerName !== 'string' || !action.customerName.trim() || !Number.isFinite(amount) || amount <= 0) {
+      return null;
+    }
+    return { ...action, customerName: action.customerName.trim(), amount };
+  }
+
+  if (['ADD_STOCK', 'REDUCE_STOCK'].includes(action.action)) {
+    const quantity = Number(action.quantity);
+    if (typeof action.productName !== 'string' || !action.productName.trim() || !Number.isFinite(quantity) || quantity <= 0) {
+      return null;
+    }
+    return { ...action, productName: action.productName.trim(), quantity };
+  }
+
+  return action;
 }
 
 /**
@@ -302,14 +334,18 @@ Rules:
       // Clean possible markdown code fences
       const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleanJson);
+      const validated = validateGeminiAction(parsed);
+      if (!validated) throw new Error('Gemini response did not contain a valid shop action.');
 
       return {
-        ...parsed,
+        ...validated,
         engine: 'Google Gemini 2.5 AI',
       };
     } catch (err) {
-      console.warn('Gemini API call failed or encountered error:', err.message);
-      console.log('Falling back to DukaanSaathi rule-based voice interpreter.');
+      console.warn('Gemini interpretation failed; using the local parser.', {
+        name: err.name,
+        code: err.code || null,
+      });
       return parseWithRuleEngine(text, language);
     }
   }

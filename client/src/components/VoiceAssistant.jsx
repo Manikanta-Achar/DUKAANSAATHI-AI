@@ -34,6 +34,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
   const [editQuantity, setEditQuantity] = useState('');
 
   const recognitionRef = useRef(null);
+  const executionInFlight = useRef(false);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -165,16 +166,41 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
 
   // Execute Confirmed AI Action on Database
   const handleConfirmAndExecute = async () => {
-    if (!interpretedAction) return;
+    if (!interpretedAction || executionInFlight.current) return;
 
+    const action = interpretedAction.action;
+    const amount = Number(editAmount || interpretedAction.amount);
+    const quantity = Number(editQuantity || interpretedAction.quantity);
+    if (
+      ['ADD_UDHAAR', 'RECORD_REPAYMENT'].includes(action) &&
+      (!editCustomer.trim() || !Number.isFinite(amount) || amount <= 0)
+    ) {
+      showToast('Enter a customer name and a valid positive amount.', 'error');
+      return;
+    }
+    if (
+      ['ADD_STOCK', 'REDUCE_STOCK'].includes(action) &&
+      (!editProduct.trim() || !Number.isFinite(quantity) || quantity <= 0)
+    ) {
+      showToast('Enter a product name and a valid positive quantity.', 'error');
+      return;
+    }
+    if (
+      !['ADD_UDHAAR', 'RECORD_REPAYMENT', 'ADD_STOCK', 'REDUCE_STOCK', 'QUERY_UDHAAR', 'QUERY_LOW_STOCK'].includes(action)
+    ) {
+      showToast('This command needs clarification before it can be saved.', 'error');
+      return;
+    }
+
+    executionInFlight.current = true;
     setIsExecuting(true);
     try {
       const payload = {
-        action: interpretedAction.action,
+        action,
         customerName: editCustomer || interpretedAction.customerName,
-        amount: editAmount ? Number(editAmount) : interpretedAction.amount,
+        amount,
         productName: editProduct || interpretedAction.productName,
-        quantity: editQuantity ? Number(editQuantity) : interpretedAction.quantity,
+        quantity,
         unit: interpretedAction.unit,
         description: `Voice Command: ${inputText || transcript}`,
       };
@@ -202,6 +228,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
       const errMsg = err.response?.data?.message || err.message || 'Execution failed';
       showToast(errMsg, 'error');
     } finally {
+      executionInFlight.current = false;
       setIsExecuting(false);
     }
   };
@@ -464,7 +491,7 @@ export default function VoiceAssistant({ isModal = false, onClose = null }) {
               <span>Cancel (रद्द करें)</span>
             </button>
 
-            {interpretedAction.action !== 'UNKNOWN' && (
+            {!['UNKNOWN', 'NEED_CLARIFICATION'].includes(interpretedAction.action) && (
               <button
                 onClick={handleConfirmAndExecute}
                 disabled={isExecuting}

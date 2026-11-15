@@ -185,6 +185,10 @@ function ensureMemoryInitialized() {
 }
 
 // ----------------- CUSTOMER SERVICES -----------------
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export async function getCustomers(search = '', status = 'active') {
   if (isDbConnected()) {
     const query = {};
@@ -270,7 +274,7 @@ export async function findCustomerByName(name) {
   if (!name) return null;
   const clean = name.trim().toLowerCase();
   if (isDbConnected()) {
-    return await Customer.findOne({ name: { $regex: new RegExp(`^${clean}$`, 'i') } });
+    return await Customer.findOne({ name: { $regex: new RegExp(`^${escapeRegex(clean)}$`, 'i') } });
   }
   ensureMemoryInitialized();
   return memoryStore.customers.find((c) => c.name.toLowerCase() === clean) || null;
@@ -281,7 +285,9 @@ export async function createCustomer({ name, phone = '' }) {
   const cleanName = name.trim();
 
   if (isDbConnected()) {
-    const existing = await Customer.findOne({ name: { $regex: new RegExp(`^${cleanName}$`, 'i') } });
+    const existing = await Customer.findOne({
+      name: { $regex: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') },
+    });
     if (existing) {
       if (existing.isArchived) {
         existing.isArchived = false;
@@ -441,7 +447,7 @@ export async function unarchiveCustomer(id) {
 // ----------------- UDHAAR & REPAYMENT -----------------
 export async function addUdhaar({ customerId, customerName, amount, description = 'Credit added' }) {
   const numericAmount = Number(amount);
-  if (isNaN(numericAmount) || numericAmount <= 0) {
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
     throw new Error('Valid udhaar amount greater than 0 is required');
   }
 
@@ -452,12 +458,10 @@ export async function addUdhaar({ customerId, customerName, amount, description 
       : memoryStore.customers.find((c) => String(c._id) === String(customerId));
   } else if (customerName) {
     customer = await findCustomerByName(customerName);
-    if (!customer) {
-      customer = await createCustomer({ name: customerName });
-    }
   }
 
   if (!customer) throw new Error('Customer not found');
+  if (customer.isArchived === true) throw new Error('Archived customers cannot receive new credit');
 
   const newBalance = Number(customer.totalUdhaar || 0) + numericAmount;
 
@@ -503,7 +507,7 @@ export async function addUdhaar({ customerId, customerName, amount, description 
 
 export async function recordRepayment({ customerId, customerName, amount, description = 'Repayment received' }) {
   const numericAmount = Number(amount);
-  if (isNaN(numericAmount) || numericAmount <= 0) {
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
     throw new Error('Valid repayment amount greater than 0 is required');
   }
 
@@ -517,6 +521,7 @@ export async function recordRepayment({ customerId, customerName, amount, descri
   }
 
   if (!customer) throw new Error(`Customer "${customerName || customerId}" not found for repayment`);
+  if (customer.isArchived === true) throw new Error('Archived customers cannot record repayments');
 
   const currentBalance = Number(customer.totalUdhaar || 0);
   const newBalance = Math.max(0, currentBalance - numericAmount);
@@ -586,17 +591,34 @@ export async function findProductByName(name) {
   if (!name) return null;
   const clean = name.trim().toLowerCase();
   if (isDbConnected()) {
-    // Exact or loose match
-    const exact = await Product.findOne({ name: { $regex: new RegExp(`^${clean}$`, 'i') } });
+    const exact = await Product.findOne({
+      name: { $regex: new RegExp(`^${escapeRegex(clean)}$`, 'i') },
+    });
     if (exact) return exact;
-    return await Product.findOne({ name: { $regex: clean, $options: 'i' } });
+
+    const partialMatches = await Product.find({
+      name: { $regex: escapeRegex(clean), $options: 'i' },
+    }).limit(2);
+    if (partialMatches.length === 1) return partialMatches[0];
+    if (partialMatches.length > 1) return null;
+
+    const tokens = clean.split(/\s+/).filter((token) => token.length > 1);
+    const tokenMatches = await Product.find({
+      $or: tokens.map((token) => ({ name: { $regex: escapeRegex(token), $options: 'i' } })),
+    }).limit(2);
+    return tokenMatches.length === 1 ? tokenMatches[0] : null;
   }
   ensureMemoryInitialized();
-  return (
-    memoryStore.products.find((p) => p.name.toLowerCase() === clean) ||
-    memoryStore.products.find((p) => p.name.toLowerCase().includes(clean)) ||
-    null
+  const exact = memoryStore.products.find((p) => p.name.toLowerCase() === clean);
+  if (exact) return exact;
+  const partialMatches = memoryStore.products.filter((p) => p.name.toLowerCase().includes(clean));
+  if (partialMatches.length === 1) return partialMatches[0];
+  if (partialMatches.length > 1) return null;
+  const tokens = clean.split(/\s+/).filter((token) => token.length > 1);
+  const tokenMatches = memoryStore.products.filter((p) =>
+    tokens.some((token) => p.name.toLowerCase().includes(token))
   );
+  return tokenMatches.length === 1 ? tokenMatches[0] : null;
 }
 
 export async function createProduct({ name, price = 0, quantity = 0, unit = 'packets', lowStockThreshold = 5 }) {
@@ -649,7 +671,9 @@ export async function createProduct({ name, price = 0, quantity = 0, unit = 'pac
 
 export async function updateProduct(id, updates) {
   if (isDbConnected()) {
-    return await Product.findByIdAndUpdate(id, updates, { new: true }).lean();
+    const product = await Product.findByIdAndUpdate(id, updates, { new: true }).lean();
+    if (!product) throw new Error('Product not found');
+    return product;
   }
   ensureMemoryInitialized();
   const index = memoryStore.products.findIndex((p) => String(p._id) === String(id));
@@ -664,7 +688,9 @@ export async function updateProduct(id, updates) {
 
 export async function deleteProduct(id) {
   if (isDbConnected()) {
-    return await Product.findByIdAndDelete(id);
+    const product = await Product.findByIdAndDelete(id);
+    if (!product) throw new Error('Product not found');
+    return product;
   }
   ensureMemoryInitialized();
   const index = memoryStore.products.findIndex((p) => String(p._id) === String(id));
@@ -675,7 +701,7 @@ export async function deleteProduct(id) {
 
 export async function adjustStock({ productId, productName, quantityDelta, isSale = false, reason = '' }) {
   const delta = Number(quantityDelta);
-  if (isNaN(delta) || delta === 0) throw new Error('Quantity change must be non-zero');
+  if (!Number.isFinite(delta) || delta === 0) throw new Error('Quantity change must be non-zero');
 
   let product = null;
   if (productId) {
@@ -831,17 +857,47 @@ export async function reverseTransaction(transactionId, reason = 'Entry correcti
 
 // ----------------- DASHBOARD METRICS -----------------
 export async function getDashboardStats() {
-  const customers = await getCustomers();
-  const products = await getProducts();
-  const allTxns = await getTransactions({ limit: 100 });
+  const dbConnected = isDbConnected();
+  const [customers, products] = await Promise.all([getCustomers(), getProducts()]);
+
+  const startOfPeriod = new Date();
+  startOfPeriod.setUTCHours(0, 0, 0, 0);
+  startOfPeriod.setUTCDate(startOfPeriod.getUTCDate() - 6);
+
+  let recentTransactions;
+  let totalSales;
+  let activityTransactions;
+  if (dbConnected) {
+    const [recent, sales, activity] = await Promise.all([
+      getTransactions({ limit: 6 }),
+      Transaction.aggregate([
+        { $match: { type: 'sale', isReversed: { $ne: true } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      Transaction.find({
+        createdAt: { $gte: startOfPeriod },
+        isReversed: { $ne: true },
+      })
+        .select('type amount createdAt')
+        .lean(),
+    ]);
+    recentTransactions = recent;
+    totalSales = Number(sales[0]?.total) || 0;
+    activityTransactions = activity;
+  } else {
+    ensureMemoryInitialized();
+    const transactions = memoryStore.transactions;
+    recentTransactions = await getTransactions({ limit: 6 });
+    totalSales = transactions
+      .filter((transaction) => transaction.type === 'sale' && !transaction.isReversed)
+      .reduce((sum, transaction) => sum + (Number(transaction.amount) || 0), 0);
+    activityTransactions = transactions.filter(
+      (transaction) => new Date(transaction.createdAt) >= startOfPeriod && !transaction.isReversed
+    );
+  }
 
   // Outstanding Udhaar: Sum of all customers' totalUdhaar
   const outstandingUdhaar = customers.reduce((sum, c) => sum + (Number(c.totalUdhaar) || 0), 0);
-
-  // Total Sales: Sum of amount for non-reversed 'sale' transactions (repayments are NOT sales)
-  const totalSales = allTxns
-    .filter((t) => t.type === 'sale' && !t.isReversed)
-    .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
 
   // Total customers count
   const totalCustomers = customers.length;
@@ -851,8 +907,6 @@ export async function getDashboardStats() {
   const lowStockCount = lowStockItems.length;
 
   // Recent transactions (last 6)
-  const recentTransactions = allTxns.slice(0, 6);
-
   // Daily activity for the past 7 days
   const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const now = new Date();
@@ -872,8 +926,7 @@ export async function getDashboardStats() {
     };
   }
 
-  allTxns.forEach((t) => {
-    if (t.isReversed) return;
+  activityTransactions.forEach((t) => {
     const dateKey = new Date(t.createdAt).toISOString().split('T')[0];
     if (dailyMap[dateKey]) {
       if (t.type === 'sale') {

@@ -7,6 +7,7 @@ import {
   findCustomerByName,
   findProductByName,
 } from '../services/dataService.js';
+import { sendApiError } from '../utils/apiErrors.js';
 
 export const processVoice = async (req, res) => {
   try {
@@ -23,6 +24,7 @@ export const processVoice = async (req, res) => {
 
     if (proposedAction.customerName) {
       customerContext = await findCustomerByName(proposedAction.customerName);
+      if (customerContext?.isArchived) customerContext = null;
     }
     if (proposedAction.productName) {
       productContext = await findProductByName(proposedAction.productName);
@@ -50,8 +52,7 @@ export const processVoice = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Error in processVoice:', error.message);
-    return res.status(500).json({ success: false, message: error.message });
+    return sendApiError(res, error, 500);
   }
 };
 
@@ -68,12 +69,19 @@ export const executeVoiceAction = async (req, res) => {
 
     switch (action) {
       case 'ADD_UDHAAR': {
-        if (!customerName || !amount || Number(amount) <= 0) {
+        const numericAmount = Number(amount);
+        const cleanCustomerName = typeof customerName === 'string' ? customerName.trim() : '';
+        if (!cleanCustomerName || !Number.isFinite(numericAmount) || numericAmount <= 0) {
           return res.status(400).json({ success: false, message: 'Valid customer name and amount are required' });
         }
+        const customer = await findCustomerByName(cleanCustomerName);
+        if (!customer || customer.isArchived) {
+          return res.status(404).json({ success: false, message: 'Active customer not found' });
+        }
         result = await addUdhaar({
-          customerName,
-          amount: Number(amount),
+          customerId: customer._id,
+          customerName: customer.name,
+          amount: numericAmount,
           description: description || `Voice credit: ₹${amount}`,
         });
         spokenConfirmation = `${result.customer.name} के खाते में ₹${amount} उधार जोड़ दिया गया है। नया बकाया ₹${result.customer.totalUdhaar} है।`;
@@ -81,12 +89,19 @@ export const executeVoiceAction = async (req, res) => {
       }
 
       case 'RECORD_REPAYMENT': {
-        if (!customerName || !amount || Number(amount) <= 0) {
+        const numericAmount = Number(amount);
+        const cleanCustomerName = typeof customerName === 'string' ? customerName.trim() : '';
+        if (!cleanCustomerName || !Number.isFinite(numericAmount) || numericAmount <= 0) {
           return res.status(400).json({ success: false, message: 'Valid customer name and amount are required' });
         }
+        const customer = await findCustomerByName(cleanCustomerName);
+        if (!customer || customer.isArchived) {
+          return res.status(404).json({ success: false, message: 'Active customer not found' });
+        }
         result = await recordRepayment({
-          customerName,
-          amount: Number(amount),
+          customerId: customer._id,
+          customerName: customer.name,
+          amount: numericAmount,
           description: description || `Voice repayment: ₹${amount}`,
         });
         spokenConfirmation = `${result.customer.name} से ₹${amount} की वापसी दर्ज हो गई। बाकी उधार ₹${result.customer.totalUdhaar} है।`;
@@ -94,12 +109,18 @@ export const executeVoiceAction = async (req, res) => {
       }
 
       case 'ADD_STOCK': {
-        if (!productName || !quantity || Number(quantity) <= 0) {
+        const numericQuantity = Number(quantity);
+        const cleanProductName = typeof productName === 'string' ? productName.trim() : '';
+        if (!cleanProductName || !Number.isFinite(numericQuantity) || numericQuantity <= 0) {
           return res.status(400).json({ success: false, message: 'Valid product name and quantity are required' });
         }
+        const product = await findProductByName(cleanProductName);
+        if (!product) {
+          return res.status(404).json({ success: false, message: 'Product not found in inventory' });
+        }
         result = await adjustStock({
-          productName,
-          quantityDelta: Math.abs(Number(quantity)),
+          productId: product._id,
+          quantityDelta: numericQuantity,
           isSale: false,
           reason: description || `Voice stock add: +${quantity}`,
         });
@@ -108,12 +129,18 @@ export const executeVoiceAction = async (req, res) => {
       }
 
       case 'REDUCE_STOCK': {
-        if (!productName || !quantity || Number(quantity) <= 0) {
+        const numericQuantity = Number(quantity);
+        const cleanProductName = typeof productName === 'string' ? productName.trim() : '';
+        if (!cleanProductName || !Number.isFinite(numericQuantity) || numericQuantity <= 0) {
           return res.status(400).json({ success: false, message: 'Valid product name and quantity are required' });
         }
+        const product = await findProductByName(cleanProductName);
+        if (!product) {
+          return res.status(404).json({ success: false, message: 'Product not found in inventory' });
+        }
         result = await adjustStock({
-          productName,
-          quantityDelta: -Math.abs(Number(quantity)),
+          productId: product._id,
+          quantityDelta: -numericQuantity,
           isSale: false,
           reason: description || `Voice stock reduction: -${quantity}`,
         });
@@ -154,7 +181,6 @@ export const executeVoiceAction = async (req, res) => {
       spokenConfirmation,
     });
   } catch (error) {
-    console.error('Error in executeVoiceAction:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };

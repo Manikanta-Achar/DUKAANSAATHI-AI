@@ -11,6 +11,7 @@ import {
   getTransactions,
   reverseTransaction,
 } from '../services/dataService.js';
+import { sendApiError } from '../utils/apiErrors.js';
 
 export const getUdhaar = async (req, res) => {
   try {
@@ -20,8 +21,7 @@ export const getUdhaar = async (req, res) => {
     const customers = await getCustomers(search, status);
     return res.json({ success: true, data: customers });
   } catch (error) {
-    console.error('Error in getUdhaar:', error.message);
-    return res.status(500).json({ success: false, message: error.message });
+    return sendApiError(res, error, 500);
   }
 };
 
@@ -33,8 +33,7 @@ export const getCustomer = async (req, res) => {
     }
     return res.json({ success: true, data: customer });
   } catch (error) {
-    console.error('Error in getCustomer:', error.message);
-    return res.status(500).json({ success: false, message: error.message });
+    return sendApiError(res, error, 500);
   }
 };
 
@@ -47,8 +46,7 @@ export const addCustomer = async (req, res) => {
     const customer = await createCustomer({ name, phone });
     return res.status(201).json({ success: true, data: customer });
   } catch (error) {
-    console.error('Error in addCustomer:', error.message);
-    return res.status(500).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };
 
@@ -62,8 +60,7 @@ export const updateCustomer = async (req, res) => {
     const updated = await updateCustomerService(id, { name, phone });
     return res.json({ success: true, data: updated, message: 'Customer updated successfully' });
   } catch (error) {
-    console.error('Error in updateCustomer:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };
 
@@ -93,8 +90,7 @@ export const deleteCustomer = async (req, res) => {
         : `Customer "${result.customer.name}" permanently deleted.`,
     });
   } catch (error) {
-    console.error('Error in deleteCustomer:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };
 
@@ -109,8 +105,7 @@ export const archiveCustomer = async (req, res) => {
       message: `Customer "${result.customer.name}" has been archived.`,
     });
   } catch (error) {
-    console.error('Error in archiveCustomer:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };
 
@@ -125,8 +120,7 @@ export const unarchiveCustomer = async (req, res) => {
       message: `Customer "${result.customer.name}" restored to active ledger.`,
     });
   } catch (error) {
-    console.error('Error in unarchiveCustomer:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };
 
@@ -139,8 +133,7 @@ export const createUdhaar = async (req, res) => {
     const result = await addUdhaar({ customerId, customerName, amount, description });
     return res.status(201).json({ success: true, data: result });
   } catch (error) {
-    console.error('Error in createUdhaar:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };
 
@@ -153,8 +146,7 @@ export const recordPayment = async (req, res) => {
     const result = await recordRepayment({ customerId, customerName, amount, description });
     return res.status(201).json({ success: true, data: result });
   } catch (error) {
-    console.error('Error in recordPayment:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };
 
@@ -164,8 +156,7 @@ export const getHistory = async (req, res) => {
     const history = await getTransactions({ type, search, limit });
     return res.json({ success: true, data: history });
   } catch (error) {
-    console.error('Error in getHistory:', error.message);
-    return res.status(500).json({ success: false, message: error.message });
+    return sendApiError(res, error, 500);
   }
 };
 
@@ -176,7 +167,6 @@ export const reverseEntry = async (req, res) => {
     const reversed = await reverseTransaction(id, reason);
     return res.json({ success: true, data: reversed, message: 'Transaction reversed successfully' });
   } catch (error) {
-    console.error('Error in reverseEntry:', error.message);
-    return res.status(400).json({ success: false, message: error.message });
+    return sendApiError(res, error, 400);
   }
 };

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import api from '../api/api.js';
 
 export const ShopContext = createContext(null);
@@ -15,10 +15,12 @@ export function ShopProvider({ children }) {
   });
 
   const [customers, setCustomers] = useState([]);
+  const [customersLoading, setCustomersLoading] = useState(true);
   const [products, setProducts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const customerRequestId = useRef(0);
 
   // Voice Language: 'hi-IN' (Hindi), 'kn-IN' (Kannada), 'en-IN' (English)
   const [speechLang, setSpeechLang] = useState('hi-IN');
@@ -37,15 +39,18 @@ export function ShopProvider({ children }) {
   const refreshDashboard = useCallback(async () => {
     try {
       const res = await api.get('/api/dashboard');
-      if (res.data?.success) {
-        setDashboard(res.data.data);
-      }
+      if (!res.data?.success || !res.data.data) return false;
+      setDashboard(res.data.data);
+      return true;
     } catch (err) {
       console.warn('Dashboard fetch issue:', err.message);
+      return false;
     }
   }, []);
 
   const refreshCustomers = useCallback(async (search = '', status = 'active') => {
+    const requestId = ++customerRequestId.current;
+    setCustomersLoading(true);
     try {
       const params = new URLSearchParams();
       if (search) params.append('search', search);
@@ -53,25 +58,33 @@ export function ShopProvider({ children }) {
       const res = await api.get(`/api/udhaar/customers?${params.toString()}`, {
         headers: { 'Cache-Control': 'no-cache' },
       });
-      if (res.data?.success && Array.isArray(res.data.data)) {
-        setCustomers(res.data.data);
-        return true;
+      if (requestId !== customerRequestId.current) return true;
+      if (!res.data?.success || !Array.isArray(res.data.data)) {
+        setError('The customer service returned an unexpected response.');
+        return false;
       }
-      return false;
+      setCustomers(res.data.data);
+      return true;
     } catch (err) {
       console.warn('Customers fetch issue:', err.message);
+      if (requestId === customerRequestId.current) {
+        setError('Could not load customers. Check the backend and database connection.');
+      }
       return false;
+    } finally {
+      if (requestId === customerRequestId.current) setCustomersLoading(false);
     }
   }, []);
 
   const refreshProducts = useCallback(async (search = '') => {
     try {
       const res = await api.get(`/api/inventory${search ? `?search=${encodeURIComponent(search)}` : ''}`);
-      if (res.data?.success) {
-        setProducts(res.data.data);
-      }
+      if (!res.data?.success || !Array.isArray(res.data.data)) return false;
+      setProducts(res.data.data);
+      return true;
     } catch (err) {
       console.warn('Products fetch issue:', err.message);
+      return false;
     }
   }, []);
 
@@ -83,11 +96,12 @@ export function ShopProvider({ children }) {
       if (filters.limit) params.append('limit', filters.limit);
 
       const res = await api.get(`/api/transactions?${params.toString()}`);
-      if (res.data?.success) {
-        setTransactions(res.data.data);
-      }
+      if (!res.data?.success || !Array.isArray(res.data.data)) return false;
+      setTransactions(res.data.data);
+      return true;
     } catch (err) {
       console.warn('Transactions fetch issue:', err.message);
+      return false;
     }
   }, []);
 
@@ -95,14 +109,20 @@ export function ShopProvider({ children }) {
     setLoading(true);
     setError(null);
     try {
-      await Promise.all([
+      const results = await Promise.all([
         refreshDashboard(),
         refreshCustomers(),
         refreshProducts(),
         refreshTransactions(),
       ]);
+      if (results.some((result) => !result)) {
+        setError('Some shop data could not be loaded. Check the backend and database connection.');
+        return false;
+      }
+      return true;
     } catch (err) {
       setError('Could not connect to DukaanSaathi server. Please ensure the backend is running.');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -128,6 +148,7 @@ export function ShopProvider({ children }) {
   const value = {
     dashboard,
     customers,
+    customersLoading,
     products,
     transactions,
     loading,
