@@ -28,6 +28,8 @@ export function getInitialSeedData() {
       name: 'Ramesh',
       phone: '9876543210',
       totalUdhaar: 60,
+      isArchived: false,
+      archivedAt: null,
       createdAt: new Date(now.getTime() - 86400000 * 2),
       updatedAt: now,
     },
@@ -36,6 +38,8 @@ export function getInitialSeedData() {
       name: 'Suresh',
       phone: '9845123456',
       totalUdhaar: 150,
+      isArchived: false,
+      archivedAt: null,
       createdAt: new Date(now.getTime() - 86400000 * 5),
       updatedAt: now,
     },
@@ -44,6 +48,8 @@ export function getInitialSeedData() {
       name: 'Anita Sharma',
       phone: '9811223344',
       totalUdhaar: 0,
+      isArchived: false,
+      archivedAt: null,
       createdAt: new Date(now.getTime() - 86400000 * 7),
       updatedAt: now,
     },
@@ -179,15 +185,68 @@ function ensureMemoryInitialized() {
 }
 
 // ----------------- CUSTOMER SERVICES -----------------
-export async function getCustomers(search = '') {
+export async function getCustomers(search = '', status = 'active') {
   if (isDbConnected()) {
-    const query = search ? { name: { $regex: search, $options: 'i' } } : {};
-    return await Customer.find(query).sort({ updatedAt: -1 }).lean();
+    const query = {};
+    if (status === 'archived') {
+      query.isArchived = true;
+    } else if (status === 'all') {
+      // all
+    } else {
+      query.isArchived = { $ne: true };
+    }
+
+    if (search && search.trim()) {
+      const q = search.trim();
+      query.$or = [
+        { name: { $regex: q, $options: 'i' } },
+        { phone: { $regex: q, $options: 'i' } },
+      ];
+    }
+
+    const list = await Customer.find(query).sort({ updatedAt: -1 }).lean();
+    const custIds = list.map((c) => c._id);
+    const counts = await Transaction.aggregate([
+      { $match: { customerId: { $in: custIds } } },
+      { $group: { _id: '$customerId', count: { $sum: 1 } } },
+    ]);
+    const countMap = {};
+    counts.forEach((c) => {
+      countMap[String(c._id)] = c.count;
+    });
+
+    return list.map((c) => ({
+      ...c,
+      transactionCount: countMap[String(c._id)] || 0,
+    }));
   }
+
   ensureMemoryInitialized();
   const q = search.trim().toLowerCase();
   return memoryStore.customers
-    .filter((c) => !q || c.name.toLowerCase().includes(q) || (c.phone && c.phone.includes(q)))
+    .filter((c) => {
+      if (status === 'archived') {
+        if (!c.isArchived) return false;
+      } else if (status === 'all') {
+        // all
+      } else {
+        if (c.isArchived) return false;
+      }
+
+      if (q) {
+        return (
+          c.name.toLowerCase().includes(q) ||
+          (c.phone && c.phone.includes(q))
+        );
+      }
+      return true;
+    })
+    .map((c) => {
+      const count = memoryStore.transactions.filter(
+        (t) => String(t.customerId) === String(c._id)
+      ).length;
+      return { ...c, transactionCount: count };
+    })
     .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
@@ -196,7 +255,7 @@ export async function getCustomerById(id) {
     const customer = await Customer.findById(id).lean();
     if (!customer) return null;
     const history = await Transaction.find({ customerId: id }).sort({ createdAt: -1 }).lean();
-    return { ...customer, history };
+    return { ...customer, history, transactionCount: history.length };
   }
   ensureMemoryInitialized();
   const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
@@ -204,7 +263,7 @@ export async function getCustomerById(id) {
   const history = memoryStore.transactions
     .filter((t) => String(t.customerId) === String(id))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  return { ...customer, history };
+  return { ...customer, history, transactionCount: history.length };
 }
 
 export async function findCustomerByName(name) {
@@ -223,25 +282,153 @@ export async function createCustomer({ name, phone = '' }) {
 
   if (isDbConnected()) {
     const existing = await Customer.findOne({ name: { $regex: new RegExp(`^${cleanName}$`, 'i') } });
-    if (existing) return existing;
-    const customer = new Customer({ name: cleanName, phone: phone.trim(), totalUdhaar: 0 });
+    if (existing) {
+      if (existing.isArchived) {
+        existing.isArchived = false;
+        existing.archivedAt = null;
+        await existing.save();
+      }
+      return existing;
+    }
+    const customer = new Customer({
+      name: cleanName,
+      phone: phone.trim(),
+      totalUdhaar: 0,
+      isArchived: false,
+      archivedAt: null,
+    });
     return await customer.save();
   }
 
   ensureMemoryInitialized();
   const existing = memoryStore.customers.find((c) => c.name.toLowerCase() === cleanName.toLowerCase());
-  if (existing) return existing;
+  if (existing) {
+    if (existing.isArchived) {
+      existing.isArchived = false;
+      existing.archivedAt = null;
+      existing.updatedAt = new Date();
+    }
+    return existing;
+  }
 
   const newCust = {
     _id: memoryStore.generateId(),
     name: cleanName,
     phone: phone.trim(),
     totalUdhaar: 0,
+    isArchived: false,
+    archivedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
   memoryStore.customers.push(newCust);
   return newCust;
+}
+
+export async function updateCustomer(id, { name, phone = '' }) {
+  if (!name || !name.trim()) throw new Error('Customer name is required');
+  const cleanName = name.trim();
+  const cleanPhone = phone ? phone.trim() : '';
+
+  if (isDbConnected()) {
+    const customer = await Customer.findById(id);
+    if (!customer) throw new Error('Customer not found');
+    customer.name = cleanName;
+    customer.phone = cleanPhone;
+    await customer.save();
+
+    // Update customerName in Transaction records for audit consistency
+    await Transaction.updateMany({ customerId: id }, { customerName: cleanName });
+    return customer.toObject ? customer.toObject() : customer;
+  }
+
+  ensureMemoryInitialized();
+  const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
+  if (!customer) throw new Error('Customer not found');
+  customer.name = cleanName;
+  customer.phone = cleanPhone;
+  customer.updatedAt = new Date();
+
+  memoryStore.transactions.forEach((t) => {
+    if (String(t.customerId) === String(id)) {
+      t.customerName = cleanName;
+    }
+  });
+  return customer;
+}
+
+export async function deleteCustomer(id) {
+  if (isDbConnected()) {
+    const customer = await Customer.findById(id);
+    if (!customer) throw new Error('Customer not found');
+
+    const txnCount = await Transaction.countDocuments({ customerId: id });
+    const hasBalance = Number(customer.totalUdhaar || 0) > 0;
+
+    if (hasBalance || txnCount > 0) {
+      throw new Error(
+        `Cannot permanently delete customer "${customer.name}". They have ${hasBalance ? `an outstanding balance of ₹${customer.totalUdhaar}` : ''}${hasBalance && txnCount ? ' and ' : ''}${txnCount ? `${txnCount} transaction record(s)` : ''}. Please archive them instead.`
+      );
+    }
+
+    await Customer.findByIdAndDelete(id);
+    return { success: true, action: 'deleted', customer };
+  }
+
+  ensureMemoryInitialized();
+  const index = memoryStore.customers.findIndex((c) => String(c._id) === String(id));
+  if (index === -1) throw new Error('Customer not found');
+  const customer = memoryStore.customers[index];
+
+  const txnCount = memoryStore.transactions.filter((t) => String(t.customerId) === String(id)).length;
+  const hasBalance = Number(customer.totalUdhaar || 0) > 0;
+
+  if (hasBalance || txnCount > 0) {
+    throw new Error(
+      `Cannot permanently delete customer "${customer.name}". They have ${hasBalance ? `an outstanding balance of ₹${customer.totalUdhaar}` : ''}${hasBalance && txnCount ? ' and ' : ''}${txnCount ? `${txnCount} transaction record(s)` : ''}. Please archive them instead.`
+    );
+  }
+
+  const [removed] = memoryStore.customers.splice(index, 1);
+  return { success: true, action: 'deleted', customer: removed };
+}
+
+export async function archiveCustomer(id) {
+  if (isDbConnected()) {
+    const customer = await Customer.findById(id);
+    if (!customer) throw new Error('Customer not found');
+    customer.isArchived = true;
+    customer.archivedAt = new Date();
+    await customer.save();
+    return { success: true, action: 'archived', customer: customer.toObject ? customer.toObject() : customer };
+  }
+
+  ensureMemoryInitialized();
+  const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
+  if (!customer) throw new Error('Customer not found');
+  customer.isArchived = true;
+  customer.archivedAt = new Date();
+  customer.updatedAt = new Date();
+  return { success: true, action: 'archived', customer };
+}
+
+export async function unarchiveCustomer(id) {
+  if (isDbConnected()) {
+    const customer = await Customer.findById(id);
+    if (!customer) throw new Error('Customer not found');
+    customer.isArchived = false;
+    customer.archivedAt = null;
+    await customer.save();
+    return { success: true, action: 'unarchived', customer: customer.toObject ? customer.toObject() : customer };
+  }
+
+  ensureMemoryInitialized();
+  const customer = memoryStore.customers.find((c) => String(c._id) === String(id));
+  if (!customer) throw new Error('Customer not found');
+  customer.isArchived = false;
+  customer.archivedAt = null;
+  customer.updatedAt = new Date();
+  return { success: true, action: 'unarchived', customer };
 }
 
 // ----------------- UDHAAR & REPAYMENT -----------------
@@ -722,7 +909,13 @@ export async function seedDatabase(force = false) {
     }
 
     const createdCusts = await Customer.insertMany(
-      seed.customers.map((c) => ({ name: c.name, phone: c.phone, totalUdhaar: c.totalUdhaar }))
+      seed.customers.map((c) => ({
+        name: c.name,
+        phone: c.phone,
+        totalUdhaar: c.totalUdhaar,
+        isArchived: false,
+        archivedAt: null,
+      }))
     );
     const custMap = {};
     createdCusts.forEach((c) => (custMap[c.name] = c._id));

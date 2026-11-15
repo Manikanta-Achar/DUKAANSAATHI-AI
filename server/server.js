@@ -12,7 +12,14 @@ import { seedDatabase } from './services/dataService.js';
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(express.json());
 
 // Health check
@@ -51,15 +58,22 @@ app.use((err, _req, res, _next) => {
 
 const port = process.env.PORT || 5000;
 
-connectDB()
-  .then(() => {
-    app.listen(port, () => {
-      console.log(`🚀 DukaanSaathi AI Server running on http://localhost:${port}`);
+// In Vercel serverless environments, connectDB is called per invocation if not already connected
+let dbPromise = null;
+const initDb = () => {
+  if (!dbPromise) {
+    dbPromise = connectDB().catch((err) => {
+      console.warn('DB connect warning:', err.message);
     });
-  })
-  .catch((error) => {
-    console.error('Failed to initialize database connection:', error.message);
-    app.listen(port, () => {
-      console.log(`🚀 DukaanSaathi AI Server running on port ${port} (in-memory mode)`);
-    });
+  }
+  return dbPromise;
+};
+initDb();
+
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`🚀 DukaanSaathi AI Server running on http://localhost:${port}`);
   });
+}
+
+export default app;

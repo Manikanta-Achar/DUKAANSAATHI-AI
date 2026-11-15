@@ -45,9 +45,12 @@ export function ShopProvider({ children }) {
     }
   }, []);
 
-  const refreshCustomers = useCallback(async (search = '') => {
+  const refreshCustomers = useCallback(async (search = '', status = 'active') => {
     try {
-      const res = await api.get(`/api/udhaar/customers${search ? `?search=${encodeURIComponent(search)}` : ''}`);
+      const params = new URLSearchParams();
+      if (search) params.append('search', search);
+      if (status) params.append('status', status);
+      const res = await api.get(`/api/udhaar/customers?${params.toString()}`);
       if (res.data?.success) {
         setCustomers(res.data.data);
       }

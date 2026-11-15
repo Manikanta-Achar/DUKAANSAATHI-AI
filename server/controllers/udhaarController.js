@@ -2,6 +2,10 @@ import {
   getCustomers,
   getCustomerById,
   createCustomer,
+  updateCustomer as updateCustomerService,
+  deleteCustomer as deleteCustomerService,
+  archiveCustomer as archiveCustomerService,
+  unarchiveCustomer as unarchiveCustomerService,
   addUdhaar,
   recordRepayment,
   getTransactions,
@@ -11,7 +15,8 @@ import {
 export const getUdhaar = async (req, res) => {
   try {
     const search = req.query.search || '';
-    const customers = await getCustomers(search);
+    const status = req.query.status || 'active';
+    const customers = await getCustomers(search, status);
     return res.json({ success: true, data: customers });
   } catch (error) {
     console.error('Error in getUdhaar:', error.message);
@@ -43,6 +48,81 @@ export const addCustomer = async (req, res) => {
   } catch (error) {
     console.error('Error in addCustomer:', error.message);
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const updateCustomer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, phone } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'Customer name is required' });
+    }
+    const updated = await updateCustomerService(id, { name, phone });
+    return res.json({ success: true, data: updated, message: 'Customer updated successfully' });
+  } catch (error) {
+    console.error('Error in updateCustomer:', error.message);
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const deleteCustomer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const action = req.body?.action || req.query?.action;
+
+    if (action === 'archive') {
+      const result = await archiveCustomerService(id);
+      return res.json({
+        success: true,
+        action: 'archived',
+        data: result.customer,
+        message: `Customer "${result.customer.name}" safely archived.`,
+      });
+    }
+
+    const result = await deleteCustomerService(id);
+    return res.json({
+      success: true,
+      action: 'deleted',
+      data: result.customer,
+      message: `Customer "${result.customer.name}" permanently deleted.`,
+    });
+  } catch (error) {
+    console.error('Error in deleteCustomer:', error.message);
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const archiveCustomer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await archiveCustomerService(id);
+    return res.json({
+      success: true,
+      action: 'archived',
+      data: result.customer,
+      message: `Customer "${result.customer.name}" has been archived.`,
+    });
+  } catch (error) {
+    console.error('Error in archiveCustomer:', error.message);
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+export const unarchiveCustomer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await unarchiveCustomerService(id);
+    return res.json({
+      success: true,
+      action: 'unarchived',
+      data: result.customer,
+      message: `Customer "${result.customer.name}" restored to active ledger.`,
+    });
+  } catch (error) {
+    console.error('Error in unarchiveCustomer:', error.message);
+    return res.status(400).json({ success: false, message: error.message });
   }
 };
 
